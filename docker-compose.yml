@@ -5,7 +5,7 @@ services:
   # 1. MongoDB Database (Primary Persistence)
   # ========================================================
   mongodb:
-    image: mongo:7.0
+    image: mongo:latest
     container_name: hilokal-mongodb
     restart: always
     ports:
@@ -23,7 +23,7 @@ services:
   # 2. Redis (Caching, Presence, PubSub, Queues)
   # ========================================================
   redis:
-    image: redis:7.2-alpine
+    image: redis:alpine
     container_name: hilokal-redis
     restart: always
     ports:
@@ -38,7 +38,7 @@ services:
   # 3. MinIO (S3-Compatible Object Storage for Images/Audio)
   # ========================================================
   minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: quay.io/minio/minio:latest
     container_name: hilokal-minio
     restart: always
     ports:
@@ -55,7 +55,7 @@ services:
 
   # Helper service: Automatically creates required MinIO buckets
   minio-init:
-    image: minio/mc:RELEASE.2024-05-09T17-04-24Z
+    image: quay.io/minio/mc:latest
     container_name: hilokal-minio-init
     depends_on:
       - minio
@@ -77,7 +77,7 @@ services:
   # 4. LiveKit WebRTC Audio Server (SFU)
   # ========================================================
   livekit:
-    image: livekit/livekit-server:v1.6.1
+    image: livekit/livekit-server:latest
     container_name: hilokal-livekit
     restart: always
     ports:
