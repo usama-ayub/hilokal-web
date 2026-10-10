@@ -38,7 +38,7 @@ services:
   # 3. MinIO (S3-Compatible Object Storage for Images/Audio)
   # ========================================================
   minio:
-    image: quay.io/minio/minio:latest
+    image: minio/minio:latest
     container_name: hilokal-minio
     restart: always
     ports:
@@ -50,26 +50,6 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
-    networks:
-      - hilokal-network
-
-  # Helper service: Automatically creates required MinIO buckets
-  minio-init:
-    image: quay.io/minio/mc:latest
-    container_name: hilokal-minio-init
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 3;
-      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadminpassword123;
-      /usr/bin/mc mb --ignore-existing myminio/avatars;
-      /usr/bin/mc mb --ignore-existing myminio/audio-bios;
-      /usr/bin/mc mb --ignore-existing myminio/room-banners;
-      /usr/bin/mc anonymous set download myminio/avatars;
-      /usr/bin/mc anonymous set download myminio/room-banners;
-      exit 0;
-      "
     networks:
       - hilokal-network
 

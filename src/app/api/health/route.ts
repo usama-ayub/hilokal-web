@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db";
 import { redis } from "@/lib/redis";
-import { minioClient, STORAGE_BUCKETS } from "@/lib/storage";
+import { minioClient, STORAGE_BUCKETS, ensureBucketsExist } from "@/lib/storage";
 
 export async function GET() {
   const healthReport = {
@@ -55,9 +55,10 @@ export async function GET() {
     healthReport.status = "degraded";
   }
 
-  // 3. Test MinIO Storage Connection
+  // 3. Test MinIO Storage Connection & Ensure Buckets
   const minioStart = Date.now();
   try {
+    await ensureBucketsExist();
     const exists = await minioClient.bucketExists(STORAGE_BUCKETS.AVATARS);
     healthReport.services.minio = {
       status: exists ? "connected_and_bucket_ready" : "connected_bucket_missing",

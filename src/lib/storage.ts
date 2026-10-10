@@ -24,12 +24,44 @@ export const STORAGE_BUCKETS = {
 } as const;
 
 /**
+ * Automatically ensure that required MinIO buckets exist and configure public read policies.
+ * Eliminates the need for external `mc` CLI or auxiliary init containers.
+ */
+export async function ensureBucketsExist(): Promise<void> {
+  const buckets = Object.values(STORAGE_BUCKETS);
+
+  for (const bucket of buckets) {
+    try {
+      const exists = await minioClient.bucketExists(bucket);
+      if (!exists) {
+        await minioClient.makeBucket(bucket, "us-east-1");
+        console.log(`Created MinIO storage bucket: ${bucket}`);
+
+        // Set public read policy for avatars and room banners
+        if (bucket === STORAGE_BUCKETS.AVATARS || bucket === STORAGE_BUCKETS.ROOM_BANNERS) {
+          const publicPolicy = {
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Effect: "Allow",
+                Principal: "*",
+                Action: ["s3:GetObject"],
+                Resource: [`arn:aws:s3:::${bucket}/*`],
+              },
+            ],
+          };
+          await minioClient.setBucketPolicy(bucket, JSON.stringify(publicPolicy));
+        }
+      }
+    } catch (err) {
+      console.error(`Error ensuring MinIO bucket ${bucket}:`, err);
+    }
+  }
+}
+
+/**
  * Generate a pre-signed PUT URL so client browsers can upload files directly to MinIO
  * without stressing the Node.js API server RAM or CPU.
- * 
- * @param bucket Name of the destination bucket (avatars, room-banners, audio-bios)
- * @param objectKey Destination file path inside the bucket
- * @param expirySeconds Expiration duration for the upload URL (default: 15 minutes)
  */
 export async function getPresignedUploadUrl(
   bucket: string,
