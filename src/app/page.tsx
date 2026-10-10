@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Headphones,
   Sparkles,
@@ -18,7 +18,6 @@ import {
   UploadCloud,
   FileCode2,
   Send,
-  UserCheck,
   ShieldCheck,
   Flame,
   Globe,
@@ -27,9 +26,18 @@ import {
   UserPlus,
   Activity,
   Mic,
+  MicOff,
+  Hand,
+  Volume2,
+  DoorOpen,
+  PlusCircle,
+  Users,
+  Award,
+  Zap,
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
 import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
+import { useLiveKitRoom } from "@/hooks/useLiveKitRoom";
 
 interface ServiceHealth {
   status: string;
@@ -57,6 +65,29 @@ interface DbTestResult {
     languages: string[];
     room: { id: string; title: string; status: string };
     transaction: { amount: number; type: string };
+  };
+}
+
+interface ActiveRoomItem {
+  id: string;
+  title: string;
+  description: string;
+  primaryLanguage: string;
+  targetLevels: string[];
+  tableType: string;
+  maxSpeakers: number;
+  bannerUrl?: string;
+  host: {
+    _id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
+    isVip: boolean;
+  };
+  realtime: {
+    speakerCount: number;
+    listenerCount: number;
+    handRaiseCount: number;
   };
 }
 
@@ -88,6 +119,29 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [presenceData, setPresenceData] = useState<{ online: boolean; activeRoomId: string | null } | null>(null);
   const [checkingPresence, setCheckingPresence] = useState<boolean>(false);
+
+  // Day 4 LiveKit Audio & Realtime State
+  const [rooms, setRooms] = useState<ActiveRoomItem[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState<boolean>(false);
+  const [selectedRoom, setSelectedRoom] = useState<ActiveRoomItem | null>(null);
+  const [activeToken, setActiveToken] = useState<string | null>(null);
+  const [activeRole, setActiveRole] = useState<"host" | "speaker" | "listener">("listener");
+  const [handRaised, setHandRaised] = useState<boolean>(false);
+  const [handPosition, setHandPosition] = useState<number | null>(null);
+  const [stageActionMsg, setStageActionMsg] = useState<string | null>(null);
+  const [newRoomTitle, setNewRoomTitle] = useState<string>("Spanish & English Cafe ☕");
+  const [newRoomLang, setNewRoomLang] = useState<string>("es");
+  const [creatingRoom, setCreatingRoom] = useState<boolean>(false);
+
+  const {
+    isConnected: isWebRtcConnected,
+    isConnecting: isWebRtcConnecting,
+    isMuted,
+    participants,
+    connect: connectWebRtc,
+    disconnect: disconnectWebRtc,
+    toggleMicrophone,
+  } = useLiveKitRoom();
 
   const checkHealth = async () => {
     setLoading(true);
@@ -206,11 +260,176 @@ export default function Home() {
     }
   };
 
+  // Day 4 Room Functions
+  const fetchRooms = useCallback(async () => {
+    setRoomsLoading(true);
+    try {
+      const res = await fetch("/api/rooms");
+      const data = await res.json();
+      if (data.success) {
+        setRooms(data.rooms);
+      }
+    } catch (err) {
+      console.error("Failed to load rooms:", err);
+    } finally {
+      setRoomsLoading(false);
+    }
+  }, []);
+
+  const createRoom = async () => {
+    if (!isAuthenticated) {
+      setStageActionMsg("Please register or sign in first to create an audio table.");
+      return;
+    }
+
+    setCreatingRoom(true);
+    setStageActionMsg(null);
+    try {
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newRoomTitle,
+          primaryLanguage: newRoomLang,
+          targetLevels: ["A1", "A2", "B1", "B2"],
+          tableType: "casual",
+          maxSpeakers: 6,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create room");
+
+      setStageActionMsg(`Room created successfully! Joining as Host...`);
+      await fetchRooms();
+      await joinStage(data.room.id);
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to create table");
+    } finally {
+      setCreatingRoom(false);
+    }
+  };
+
+  const joinStage = async (roomId: string) => {
+    if (!isAuthenticated) {
+      setStageActionMsg("Please register or sign in first to join an audio stage.");
+      return;
+    }
+
+    setStageActionMsg(null);
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/token`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to get room token");
+
+      setActiveToken(data.token);
+      setActiveRole(data.role);
+
+      const targetRoom = rooms.find((r) => r.id === roomId) || {
+        id: roomId,
+        title: data.room?.title || "Audio Room",
+        description: "",
+        primaryLanguage: data.room?.primaryLanguage || "en",
+        targetLevels: ["A1"],
+        tableType: "casual",
+        maxSpeakers: 6,
+        host: { _id: user?.id || "", username: user?.username || "", displayName: user?.displayName || "", isVip: true },
+        realtime: { speakerCount: 1, listenerCount: 0, handRaiseCount: 0 },
+      };
+      setSelectedRoom(targetRoom);
+
+      // Connect to LiveKit SFU WebRTC
+      await connectWebRtc(data.wsUrl, data.token);
+      setStageActionMsg(`Connected to audio table as ${data.role.toUpperCase()}`);
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to connect to room");
+    }
+  };
+
+  const handleHandRaiseToggle = async () => {
+    if (!selectedRoom) return;
+
+    try {
+      const nextAction = handRaised ? "lower" : "raise";
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/hand-raise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: nextAction }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update hand raise");
+
+      if (nextAction === "raise") {
+        setHandRaised(true);
+        setHandPosition(data.position);
+        setStageActionMsg(`Hand raised! Position in FIFO queue: #${data.position}`);
+      } else {
+        setHandRaised(false);
+        setHandPosition(null);
+        setStageActionMsg("Hand lowered");
+      }
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Hand raise failed");
+    }
+  };
+
+  const handleStageAction = async (targetUserId: string, action: "promote" | "demote" | "kick") => {
+    if (!selectedRoom) return;
+
+    try {
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/stage-action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUserId, action }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Action failed");
+
+      setStageActionMsg(`Host Action: ${data.message}`);
+      await fetchRooms();
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Stage action failed");
+    }
+  };
+
+  const leaveStage = async () => {
+    if (selectedRoom) {
+      await fetch(`/api/rooms/${selectedRoom.id}/leave`, { method: "POST" });
+    }
+    await disconnectWebRtc();
+    setSelectedRoom(null);
+    setActiveToken(null);
+    setHandRaised(false);
+    setHandPosition(null);
+    setStageActionMsg("Disconnected from stage");
+    fetchRooms();
+  };
+
+  const endStage = async () => {
+    if (!selectedRoom) return;
+    try {
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/end`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to end room");
+
+      await disconnectWebRtc();
+      setSelectedRoom(null);
+      setActiveToken(null);
+      setStageActionMsg("Audio room ended by Host. Redis keys and LiveKit SFU room closed.");
+      fetchRooms();
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to end table");
+    }
+  };
+
   useEffect(() => {
     checkHealth();
     testDbModels(false);
     fetchMe();
-  }, []);
+    fetchRooms();
+  }, [fetchMe, fetchRooms]);
 
   useEffect(() => {
     if (user?.id) {
@@ -221,7 +440,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 px-4 py-12 md:px-8 max-w-6xl mx-auto">
       {/* Background Heartbeat for logged-in user */}
-      <PresenceHeartbeat />
+      <PresenceHeartbeat activeRoomId={selectedRoom?.id} />
 
       {/* Header */}
       <header className="flex flex-col md:flex-row items-start md:items-center justify-between pb-8 border-b border-slate-800 gap-4">
@@ -262,6 +481,263 @@ export default function Home() {
           )}
         </div>
       </header>
+
+      {/* Day 4 Milestone: LiveKit Audio Infrastructure & Signaling Control Panel */}
+      <section className="mt-8">
+        <div className="bg-slate-900/70 border border-indigo-500/40 rounded-2xl p-6 shadow-2xl backdrop-blur-md relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
+            <div>
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-medium mb-1">
+                <Radio className="w-3.5 h-3.5" />
+                Day 4 Milestone: LiveKit Audio Infrastructure & Signaling (Active)
+              </div>
+              <h2 className="text-xl font-bold text-white">Live Audio Stage & Hand-Raise Queue</h2>
+              <p className="text-sm text-slate-400">
+                WebRTC audio rooms, FIFO Redis hand-raise queues, host stage promotions, and LiveKit SFU signaling.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={fetchRooms}
+                disabled={roomsLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium rounded-lg transition-colors border border-slate-700"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${roomsLoading ? "animate-spin" : ""}`} />
+                Refresh Tables
+              </button>
+            </div>
+          </div>
+
+          {/* If In Active Stage */}
+          {selectedRoom ? (
+            <div className="p-5 rounded-xl bg-slate-950/90 border border-indigo-500/50 mb-6 shadow-xl">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                    <h3 className="text-lg font-bold text-white">{selectedRoom.title}</h3>
+                    <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-semibold uppercase">
+                      {selectedRoom.primaryLanguage}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Your Stage Role: <strong className="text-indigo-400 uppercase font-mono">{activeRole}</strong> • LiveKit SFU:{" "}
+                    <span className={isWebRtcConnected ? "text-emerald-400 font-medium" : "text-amber-400 font-medium"}>
+                      {isWebRtcConnecting ? "Connecting..." : isWebRtcConnected ? "WebRTC Sub-100ms Connected" : "Ready"}
+                    </span>
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Mic Toggle (only for host or speaker) */}
+                  {(activeRole === "host" || activeRole === "speaker") && (
+                    <button
+                      onClick={toggleMicrophone}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors shadow-md ${
+                        isMuted
+                          ? "bg-slate-800 hover:bg-slate-700 text-red-400 border border-red-500/30"
+                          : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                      }`}
+                    >
+                      {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                      {isMuted ? "Unmute Mic" : "Mute Mic (Speaking Live)"}
+                    </button>
+                  )}
+
+                  {/* Hand Raise (only for listeners) */}
+                  {activeRole === "listener" && (
+                    <button
+                      onClick={handleHandRaiseToggle}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors shadow-md ${
+                        handRaised
+                          ? "bg-amber-600 text-white"
+                          : "bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30"
+                      }`}
+                    >
+                      <Hand className="w-4 h-4" />
+                      {handRaised ? `Hand Raised (#${handPosition || 1} in FIFO Queue)` : "Raise Hand to Speak"}
+                    </button>
+                  )}
+
+                  <button
+                    onClick={leaveStage}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors border border-slate-700"
+                  >
+                    <DoorOpen className="w-4 h-4" />
+                    Leave Table
+                  </button>
+
+                  {/* Host End Table Button */}
+                  {activeRole === "host" && (
+                    <button
+                      onClick={endStage}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition-colors shadow-md shadow-red-600/20"
+                    >
+                      End Table
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Stage Speakers Grid */}
+              <div className="mt-5">
+                <div className="text-xs font-semibold text-slate-400 mb-3 flex items-center gap-1.5">
+                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  Speaker Stage ({participants.length} Active Participants)
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
+                  {participants.map((p) => (
+                    <div
+                      key={p.identity}
+                      className={`p-3 rounded-xl bg-slate-900 border flex flex-col items-center text-center transition-all ${
+                        p.isSpeaking ? "border-indigo-500 shadow-lg shadow-indigo-500/30 speaking-active" : "border-slate-800"
+                      }`}
+                    >
+                      <div className="relative mb-2">
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow">
+                          {p.name.charAt(0).toUpperCase()}
+                        </div>
+                        <span
+                          className={`absolute bottom-0 right-0 p-1 rounded-full text-white text-[9px] ${
+                            p.isMuted ? "bg-red-500" : "bg-emerald-500"
+                          }`}
+                        >
+                          {p.isMuted ? <MicOff className="w-2.5 h-2.5" /> : <Mic className="w-2.5 h-2.5" />}
+                        </span>
+                      </div>
+
+                      <span className="text-xs font-bold text-white truncate max-w-full">{p.name}</span>
+                      <span className="text-[10px] text-slate-400 mt-0.5">
+                        {p.isLocal ? "(You)" : "Speaker"}
+                      </span>
+
+                      {/* Host stage actions on participant */}
+                      {activeRole === "host" && !p.isLocal && (
+                        <div className="mt-2 flex items-center gap-1 pt-1 border-t border-slate-800 w-full justify-center">
+                          <button
+                            onClick={() => handleStageAction(p.identity, "demote")}
+                            title="Demote to Listener"
+                            className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                          >
+                            Demote
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Stage Action Feedback */}
+          {stageActionMsg && (
+            <div className="mb-6 p-3 rounded-lg bg-indigo-950/40 border border-indigo-800/40 text-xs text-indigo-300 flex items-center gap-2">
+              <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>{stageActionMsg}</span>
+            </div>
+          )}
+
+          {/* Room Creation & Active Rooms Grid */}
+          <div className="space-y-6">
+            {/* Quick Table Creator (Free VIP Unlocked) */}
+            <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+              <div className="flex-1">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                  <PlusCircle className="w-4 h-4 text-emerald-400" />
+                  Create Audio Table (Free VIP Unlocked)
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 mt-2">
+                  <input
+                    type="text"
+                    value={newRoomTitle}
+                    onChange={(e) => setNewRoomTitle(e.target.value)}
+                    placeholder="Room title..."
+                    className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-800 text-xs text-white rounded-lg focus:outline-none focus:border-indigo-500"
+                  />
+                  <select
+                    value={newRoomLang}
+                    onChange={(e) => setNewRoomLang(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-900 border border-slate-800 text-xs text-white rounded-lg focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="es">Spanish (ES)</option>
+                    <option value="en">English (EN)</option>
+                    <option value="ja">Japanese (JA)</option>
+                    <option value="fr">French (FR)</option>
+                    <option value="ur">Urdu (UR)</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                onClick={createRoom}
+                disabled={creatingRoom}
+                className="mt-2 md:mt-0 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-colors shadow-lg shadow-indigo-600/20 shrink-0"
+              >
+                <PlusCircle className={`w-3.5 h-3.5 ${creatingRoom ? "animate-spin" : ""}`} />
+                {creatingRoom ? "Starting Stage..." : "Host Audio Table"}
+              </button>
+            </div>
+
+            {/* Active Tables Grid */}
+            <div>
+              <div className="text-xs font-semibold text-slate-400 mb-3 flex items-center justify-between">
+                <span>Active Live Tables ({rooms.length})</span>
+                <span className="text-[11px] text-slate-500">Real-time Redis Counters</span>
+              </div>
+
+              {rooms.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-slate-950/40 border border-slate-800/80 text-xs text-slate-500">
+                  No active audio tables found. Click &quot;Host Audio Table&quot; above to launch the first live stage!
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {rooms.map((room) => (
+                    <div
+                      key={room.id}
+                      className="p-4 rounded-xl bg-slate-950/80 border border-slate-800/80 hover:border-slate-700 transition-colors flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 text-[10px] font-bold uppercase font-mono">
+                            {room.primaryLanguage} • {room.tableType}
+                          </span>
+                          <span className="flex items-center gap-1 text-[11px] text-slate-400 font-mono">
+                            <Users className="w-3.5 h-3.5 text-emerald-400" />
+                            {room.realtime.speakerCount} stage / {room.realtime.listenerCount} audience
+                          </span>
+                        </div>
+
+                        <h4 className="text-sm font-bold text-white line-clamp-1">{room.title}</h4>
+                        <p className="text-xs text-slate-400 mt-1 line-clamp-1">
+                          Host: <strong className="text-slate-300">@{room.host?.username || "learner"}</strong>
+                        </p>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500">
+                          Levels: {room.targetLevels?.join(", ") || "All"}
+                        </span>
+
+                        <button
+                          onClick={() => joinStage(room.id)}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 text-xs font-semibold text-white rounded-lg transition-colors border border-slate-700 hover:border-indigo-500"
+                        >
+                          Join Table <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Day 3 Milestone: Authentication & Real-Time Presence Engine */}
       <section className="mt-8">
@@ -840,8 +1316,8 @@ export default function Home() {
               Real-time WebRTC audio rooms with Hosts, Speakers, and Listeners. Instant hand-raise queue powered by Redis Sorted Sets.
             </p>
           </div>
-          <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-indigo-400">
-            Coming in Day 4 <ArrowRight className="w-3.5 h-3.5" />
+          <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+            Active in Day 4 <CheckCircle2 className="w-3.5 h-3.5" />
           </div>
         </div>
 
