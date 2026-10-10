@@ -18,7 +18,18 @@ import {
   UploadCloud,
   FileCode2,
   Send,
+  UserCheck,
+  ShieldCheck,
+  Flame,
+  Globe,
+  LogOut,
+  LogIn,
+  UserPlus,
+  Activity,
+  Mic,
 } from "lucide-react";
+import { useAuthStore } from "@/store/useAuthStore";
+import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
 
 interface ServiceHealth {
   status: string;
@@ -53,12 +64,30 @@ export default function Home() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Day 2 Interactive State
+  // Day 2 State
   const [dbStatus, setDbStatus] = useState<DbTestResult | null>(null);
   const [dbLoading, setDbLoading] = useState<boolean>(false);
   const [uploading, setUploading] = useState<boolean>(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Day 3 Auth & Presence State
+  const { user, isAuthenticated, fetchMe, login, register, logout } = useAuthStore();
+  const [authMode, setAuthMode] = useState<"login" | "register">("register");
+  const [authForm, setAuthForm] = useState({
+    username: "learner_alex",
+    email: "alex@hilokal.test",
+    password: "password123",
+    displayName: "Alex Rivera",
+    nativeLanguage: "en",
+    learningLanguage: "es",
+    learningLevel: "B1",
+    bio: "Passionate polyglot learning Spanish and Japanese!",
+  });
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [presenceData, setPresenceData] = useState<{ online: boolean; activeRoomId: string | null } | null>(null);
+  const [checkingPresence, setCheckingPresence] = useState<boolean>(false);
 
   const checkHealth = async () => {
     setLoading(true);
@@ -121,13 +150,79 @@ export default function Home() {
     }
   };
 
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthMessage(null);
+    setAuthError(null);
+
+    if (authMode === "register") {
+      const res = await register({
+        username: authForm.username,
+        email: authForm.email,
+        password: authForm.password,
+        displayName: authForm.displayName,
+        nativeLanguage: authForm.nativeLanguage,
+        learningLanguage: authForm.learningLanguage,
+        learningLevel: authForm.learningLevel,
+        bio: authForm.bio,
+      });
+
+      if (!res.success) {
+        setAuthError(res.error || "Registration failed");
+      } else {
+        setAuthMessage("Account created successfully with Free VIP & 500 Coins!");
+        refreshPresence(user?.id);
+      }
+    } else {
+      const res = await login(authForm.email || authForm.username, authForm.password);
+      if (!res.success) {
+        setAuthError(res.error || "Login failed");
+      } else {
+        setAuthMessage(
+          res.dailyBonusAwarded
+            ? "Welcome back! +500 Free Coins claimed for daily login streak!"
+            : "Signed in successfully!"
+        );
+        refreshPresence(user?.id);
+      }
+    }
+  };
+
+  const refreshPresence = async (userIdToQuery?: string) => {
+    const targetId = userIdToQuery || user?.id;
+    if (!targetId) return;
+
+    setCheckingPresence(true);
+    try {
+      const res = await fetch(`/api/presence/status?userId=${targetId}`);
+      const data = await res.json();
+      if (data.success) {
+        setPresenceData(data.presence);
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setCheckingPresence(false);
+    }
+  };
+
   useEffect(() => {
     checkHealth();
     testDbModels(false);
+    fetchMe();
   }, []);
+
+  useEffect(() => {
+    if (user?.id) {
+      refreshPresence(user.id);
+    }
+  }, [user?.id]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 px-4 py-12 md:px-8 max-w-6xl mx-auto">
+      {/* Background Heartbeat for logged-in user */}
+      <PresenceHeartbeat />
+
       {/* Header */}
       <header className="flex flex-col md:flex-row items-start md:items-center justify-between pb-8 border-b border-slate-800 gap-4">
         <div>
@@ -146,18 +241,313 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Free VIP & Balance Badges */}
+        {/* Dynamic Badges */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold">
             <Crown className="w-4 h-4 text-amber-400" />
-            VIP Unlocked (Free)
+            {user?.isVip ? "VIP Member (Free)" : "VIP Unlocked (Free)"}
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
             <Coins className="w-4 h-4 text-indigo-400" />
-            500 Free Coins Daily
+            {user ? `${user.coinsBalance} Coins` : "500 Free Coins Daily"}
           </div>
+          {isAuthenticated && (
+            <button
+              onClick={() => logout()}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          )}
         </div>
       </header>
+
+      {/* Day 3 Milestone: Authentication & Real-Time Presence Engine */}
+      <section className="mt-8">
+        <div className="bg-slate-900/60 border border-emerald-500/30 rounded-2xl p-6 shadow-xl backdrop-blur-sm relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
+            <div>
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-medium mb-1">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Day 3 Milestone: JWT Auth & Redis Presence Engine (Active)
+              </div>
+              <h2 className="text-xl font-bold text-white">Authentication & Redis Heartbeats</h2>
+              <p className="text-sm text-slate-400">
+                JWT password security, automatic Free VIP, 500 Daily Coins reward, and sub-second online presence.
+              </p>
+            </div>
+
+            {isAuthenticated && user && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => refreshPresence(user.id)}
+                  disabled={checkingPresence}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium rounded-lg transition-colors border border-slate-700"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${checkingPresence ? "animate-spin" : ""}`} />
+                  Query Redis Presence
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Conditional: Authenticated View vs Guest View */}
+          {isAuthenticated && user ? (
+            <div className="space-y-4">
+              {/* Active Profile Card */}
+              <div className="p-5 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-white font-bold text-lg shadow-lg">
+                      {user.displayName?.charAt(0) || user.username.charAt(0).toUpperCase()}
+                    </div>
+                    {/* Live Online Glowing Pulse */}
+                    <span className="absolute bottom-0 right-0 flex h-4 w-4">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border-2 border-slate-950"></span>
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-white">{user.displayName}</h3>
+                      <span className="text-xs text-slate-400 font-mono">@{user.username}</span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-bold">
+                        <Crown className="w-3 h-3" /> VIP
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{user.bio || "No bio set."}</p>
+
+                    <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
+                      <span className="text-slate-400 flex items-center gap-1">
+                        <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                        Native: <strong className="text-slate-200 uppercase">{user.languages?.find((l) => l.type === "native")?.code || "EN"}</strong>
+                      </span>
+                      <span className="text-slate-400 flex items-center gap-1">
+                        <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                        Learning: <strong className="text-slate-200 uppercase">{user.languages?.find((l) => l.type === "learning")?.code || "ES"} ({user.languages?.find((l) => l.type === "learning")?.proficiency || "A1"})</strong>
+                      </span>
+                      <span className="text-slate-400 flex items-center gap-1">
+                        <Flame className="w-3.5 h-3.5 text-orange-400" />
+                        Streak: <strong className="text-orange-400">{user.currentStreak} Day{user.currentStreak > 1 ? "s" : ""}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Presence & Balance Summary */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-900/80 p-3.5 rounded-lg border border-slate-800 text-xs">
+                  <div>
+                    <div className="text-[11px] text-slate-400">Redis In-Memory Status</div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Activity className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                      <span className="font-semibold text-emerald-400">
+                        {presenceData?.online ? "Online (Sliding 60s TTL)" : "Online (Active Heartbeat)"}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Heartbeat runs every 30s
+                    </div>
+                  </div>
+
+                  <div className="sm:border-l sm:border-slate-800 sm:pl-4">
+                    <div className="text-[11px] text-slate-400">Free Coins Balance</div>
+                    <div className="flex items-center gap-1 text-indigo-400 font-bold text-sm mt-0.5">
+                      <Coins className="w-4 h-4 text-indigo-400" />
+                      {user.coinsBalance} Coins
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Zero real payments required
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {authMessage && (
+                <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{authMessage}</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              {/* Form Tab Toggles */}
+              <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
+                <button
+                  onClick={() => setAuthMode("register")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    authMode === "register"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  Register New Learner (Free VIP)
+                </button>
+                <button
+                  onClick={() => setAuthMode("login")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    authMode === "login"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Sign In Existing Learner
+                </button>
+              </div>
+
+              {/* Form Body */}
+              <form onSubmit={handleAuthSubmit} className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-400 font-medium">Username</label>
+                    <input
+                      type="text"
+                      required
+                      value={authForm.username}
+                      onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+                      placeholder="e.g. learner_alex"
+                      className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-400 font-medium">Email Address</label>
+                    <input
+                      type="email"
+                      required
+                      value={authForm.email}
+                      onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                      placeholder="e.g. alex@hilokal.test"
+                      className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-400 font-medium">Password</label>
+                    <input
+                      type="password"
+                      required
+                      value={authForm.password}
+                      onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                      placeholder="Min 6 characters"
+                      className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  {authMode === "register" && (
+                    <>
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-medium">Display Name</label>
+                        <input
+                          type="text"
+                          required
+                          value={authForm.displayName}
+                          onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
+                          placeholder="e.g. Alex Rivera"
+                          className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-medium">Native Language</label>
+                        <select
+                          value={authForm.nativeLanguage}
+                          onChange={(e) => setAuthForm({ ...authForm, nativeLanguage: e.target.value })}
+                          className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="en">English (EN)</option>
+                          <option value="es">Spanish (ES)</option>
+                          <option value="ur">Urdu (UR)</option>
+                          <option value="fr">French (FR)</option>
+                          <option value="ja">Japanese (JA)</option>
+                          <option value="ko">Korean (KO)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-medium">Learning Target & Level</label>
+                        <div className="flex gap-2">
+                          <select
+                            value={authForm.learningLanguage}
+                            onChange={(e) => setAuthForm({ ...authForm, learningLanguage: e.target.value })}
+                            className="mt-1 w-1/2 px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="es">Spanish (ES)</option>
+                            <option value="en">English (EN)</option>
+                            <option value="ja">Japanese (JA)</option>
+                            <option value="fr">French (FR)</option>
+                            <option value="de">German (DE)</option>
+                          </select>
+                          <select
+                            value={authForm.learningLevel}
+                            onChange={(e) => setAuthForm({ ...authForm, learningLevel: e.target.value })}
+                            className="mt-1 w-1/2 px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="A1">A1 (Beginner)</option>
+                            <option value="A2">A2 (Elementary)</option>
+                            <option value="B1">B1 (Intermediate)</option>
+                            <option value="B2">B2 (Upper Int)</option>
+                            <option value="C1">C1 (Advanced)</option>
+                            <option value="C2">C2 (Mastery)</option>
+                          </select>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-2">
+                  <div className="text-[11px] text-slate-400">
+                    {authMode === "register" ? (
+                      <span>★ Free VIP Crown & +500 Coins automatically granted</span>
+                    ) : (
+                      <span>★ Daily login streak increments automatically</span>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs transition-colors shadow-lg shadow-emerald-600/20"
+                  >
+                    {authMode === "register" ? (
+                      <>
+                        <UserPlus className="w-3.5 h-3.5" />
+                        Create Free VIP Account
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-3.5 h-3.5" />
+                        Sign In & Start Heartbeat
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {authError && (
+                <div className="mt-3 p-3 rounded-lg bg-red-950/40 border border-red-800/40 text-xs text-red-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              {authMessage && (
+                <div className="mt-3 p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{authMessage}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Day 1 Status & Infrastructure Card */}
       <section className="mt-8">
@@ -166,7 +556,7 @@ export default function Home() {
             <div>
               <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-medium mb-1">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                Day 1 Milestone: Foundation & Architecture (Completed & Resolved)
+                Day 1 Milestone: Foundation & Architecture (Active)
               </div>
               <h2 className="text-xl font-bold text-white">Local Infrastructure Status</h2>
               <p className="text-sm text-slate-400">
