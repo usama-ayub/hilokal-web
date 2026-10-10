@@ -38,10 +38,18 @@ import {
   Bell,
   Check,
   X,
+  MessageSquare,
+  Gift,
+  History,
+  BookOpen,
+  Coffee,
+  Heart,
+  Smile,
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
 import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
 import { useLiveKitRoom } from "@/hooks/useLiveKitRoom";
+import { VIRTUAL_GIFTS, GiftItem } from "@/lib/gifts";
 
 interface ServiceHealth {
   status: string;
@@ -107,6 +115,46 @@ interface QueuedUser {
   raisedAt: number;
 }
 
+interface RoomMessageItem {
+  _id: string;
+  type: "text" | "correction" | "gift" | "system";
+  content: string;
+  createdAt: string;
+  senderId?: {
+    _id?: string;
+    username?: string;
+    displayName?: string;
+    avatarUrl?: string;
+    isVip?: boolean;
+  };
+  correctionDetails?: {
+    originalText: string;
+    correctedText: string;
+    explanation?: string;
+  };
+  giftDetails?: {
+    giftType: string;
+    giftName: string;
+    coinCost: number;
+    recipientId?: {
+      _id?: string;
+      username?: string;
+      displayName?: string;
+      avatarUrl?: string;
+      isVip?: boolean;
+    };
+  };
+}
+
+interface CoinTxItem {
+  _id: string;
+  type: string;
+  amount: number;
+  balanceAfter: number;
+  description: string;
+  createdAt: string;
+}
+
 export default function Home() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -150,9 +198,65 @@ export default function Home() {
   const [newRoomLang, setNewRoomLang] = useState<string>("es");
   const [creatingRoom, setCreatingRoom] = useState<boolean>(false);
 
+  // Day 5 Milestone: Live Interactive Engagement & Free Virtual Gift Economy
+  const [activeStageTab, setActiveStageTab] = useState<"chat" | "gifts" | "coins">("chat");
+  const [messages, setMessages] = useState<RoomMessageItem[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState<boolean>(false);
+  const [chatInput, setChatInput] = useState<string>("");
+  const [isCorrectionMode, setIsCorrectionMode] = useState<boolean>(false);
+  const [correctionOriginal, setCorrectionOriginal] = useState<string>("");
+  const [correctionCorrected, setCorrectionCorrected] = useState<string>("");
+  const [correctionExplanation, setCorrectionExplanation] = useState<string>("");
+  const [sendingMessage, setSendingMessage] = useState<boolean>(false);
+
+  // Gifting State
+  const [selectedRecipientId, setSelectedRecipientId] = useState<string>("");
+  const [selectedGiftId, setSelectedGiftId] = useState<string>("coffee");
+  const [sendingGift, setSendingGift] = useState<boolean>(false);
+  const [giftCelebration, setGiftCelebration] = useState<{
+    emoji: string;
+    name: string;
+    sender: string;
+    recipient: string;
+  } | null>(null);
+
+  // Coin Audit State
+  const [coinTransactions, setCoinTransactions] = useState<CoinTxItem[]>([]);
+  const [coinLedgerLoading, setCoinLedgerLoading] = useState<boolean>(false);
+
   // Forward ref for stage refresh
   const selectedRoomIdRef = useRef<string | null>(null);
   selectedRoomIdRef.current = selectedRoom?.id || null;
+
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchMessages = useCallback(async (roomId: string) => {
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/messages`);
+      const data = await res.json();
+      if (data.success && data.messages) {
+        setMessages(data.messages);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch messages:", err);
+    }
+  }, []);
+
+  const fetchCoinLedger = useCallback(async () => {
+    if (!isAuthenticated) return;
+    setCoinLedgerLoading(true);
+    try {
+      const res = await fetch("/api/coins/balance");
+      const data = await res.json();
+      if (data.success && data.transactions) {
+        setCoinTransactions(data.transactions);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch coin ledger:", err);
+    } finally {
+      setCoinLedgerLoading(false);
+    }
+  }, [isAuthenticated]);
 
   const refreshActiveRoomState = useCallback(async (roomId: string) => {
     try {
@@ -196,27 +300,51 @@ export default function Home() {
   }, [user?.id]);
 
   // Handle incoming in-room data packets from peers
-  const handleDataReceived = useCallback((packet: Record<string, unknown>) => {
-    const currentId = selectedRoomIdRef.current;
-    if (currentId) {
-      refreshActiveRoomState(currentId);
-    }
-    if (packet.message) {
-      setStageActionMsg(String(packet.message));
-    }
-  }, [refreshActiveRoomState]);
+  const handleDataReceived = useCallback(
+    (packet: Record<string, unknown>) => {
+      const currentId = selectedRoomIdRef.current;
+      if (currentId) {
+        refreshActiveRoomState(currentId);
+      }
 
-  const handlePermissionsChanged = useCallback((canPublish: boolean) => {
-    if (canPublish) {
-      setActiveRole("speaker");
-      setHandRaised(false);
-      setStageActionMsg("🎉 You have been promoted to Speaker! Unmute your mic to speak.");
-    } else {
-      setActiveRole("listener");
-    }
-    const currentId = selectedRoomIdRef.current;
-    if (currentId) refreshActiveRoomState(currentId);
-  }, [refreshActiveRoomState]);
+      if (packet.type === "CHAT_MESSAGE" || packet.type === "CORRECTION") {
+        if (currentId) fetchMessages(currentId);
+      }
+
+      if (packet.type === "VIRTUAL_GIFT" && packet.gift) {
+        if (currentId) fetchMessages(currentId);
+        fetchMe();
+        setGiftCelebration({
+          emoji: String((packet.gift as Record<string, unknown>).emoji || "🎁"),
+          name: String((packet.gift as Record<string, unknown>).name || "Gift"),
+          sender: String((packet.sender as Record<string, unknown>)?.displayName || "Learner"),
+          recipient: String((packet.recipient as Record<string, unknown>)?.displayName || "Speaker"),
+        });
+
+        setTimeout(() => setGiftCelebration(null), 5000);
+      }
+
+      if (packet.message) {
+        setStageActionMsg(String(packet.message));
+      }
+    },
+    [refreshActiveRoomState, fetchMessages, fetchMe]
+  );
+
+  const handlePermissionsChanged = useCallback(
+    (canPublish: boolean) => {
+      if (canPublish) {
+        setActiveRole("speaker");
+        setHandRaised(false);
+        setStageActionMsg("🎉 You have been promoted to Speaker! Unmute your mic to speak.");
+      } else {
+        setActiveRole("listener");
+      }
+      const currentId = selectedRoomIdRef.current;
+      if (currentId) refreshActiveRoomState(currentId);
+    },
+    [refreshActiveRoomState]
+  );
 
   const {
     isConnected: isWebRtcConnected,
@@ -435,6 +563,7 @@ export default function Home() {
 
       // Refresh in-memory queue & state
       await refreshActiveRoomState(roomId);
+      await fetchMessages(roomId);
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Failed to connect to room");
     }
@@ -512,7 +641,6 @@ export default function Home() {
   const dismissQueuedUser = async (targetUserId: string) => {
     if (!selectedRoom) return;
     try {
-      // Lower hand for target user
       await fetch(`/api/rooms/${selectedRoom.id}/hand-raise`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -522,6 +650,127 @@ export default function Home() {
       await refreshActiveRoomState(selectedRoom.id);
     } catch (err) {
       console.warn("Failed to dismiss queued user:", err);
+    }
+  };
+
+  // Day 5 Functions: Chat & Language Correction
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRoom || !isAuthenticated) return;
+
+    if (isCorrectionMode) {
+      if (!correctionOriginal.trim() || !correctionCorrected.trim()) {
+        setStageActionMsg("Please fill in both original and corrected sentences");
+        return;
+      }
+    } else {
+      if (!chatInput.trim()) return;
+    }
+
+    setSendingMessage(true);
+    try {
+      const payload = isCorrectionMode
+        ? {
+            type: "correction",
+            content: `Correction: "${correctionOriginal.trim()}" ➔ "${correctionCorrected.trim()}"`,
+            correctionDetails: {
+              originalText: correctionOriginal.trim(),
+              correctedText: correctionCorrected.trim(),
+              explanation: correctionExplanation.trim(),
+            },
+          }
+        : {
+            type: "text",
+            content: chatInput.trim(),
+          };
+
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send message");
+
+      // Broadcast message via LiveKit data packet
+      await broadcastData({
+        type: isCorrectionMode ? "CORRECTION" : "CHAT_MESSAGE",
+        message: data.message,
+      });
+
+      // Clear inputs
+      setChatInput("");
+      setCorrectionOriginal("");
+      setCorrectionCorrected("");
+      setCorrectionExplanation("");
+      setIsCorrectionMode(false);
+
+      await fetchMessages(selectedRoom.id);
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to post message");
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  // Day 5 Functions: Virtual Gifting
+  const handleSendGift = async () => {
+    if (!selectedRoom || !isAuthenticated) return;
+
+    if (!selectedRecipientId) {
+      setStageActionMsg("Please select a speaker or host to send the gift to.");
+      return;
+    }
+
+    const gift = VIRTUAL_GIFTS.find((g) => g.id === selectedGiftId);
+    if (!gift) return;
+
+    if ((user?.coinsBalance || 0) < gift.coinCost) {
+      setStageActionMsg(
+        `Insufficient coins. You have ${user?.coinsBalance || 0} coins, but ${gift.name} costs ${gift.coinCost} coins.`
+      );
+      return;
+    }
+
+    setSendingGift(true);
+    try {
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/gifts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientId: selectedRecipientId,
+          giftId: selectedGiftId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send virtual gift");
+
+      // Broadcast gift event via LiveKit
+      await broadcastData({
+        type: "VIRTUAL_GIFT",
+        gift,
+        sender: { displayName: user?.displayName || user?.username },
+        recipient: {
+          displayName:
+            participants.find((p) => p.identity === selectedRecipientId)?.name ||
+            (selectedRecipientId === selectedRoom.host._id ? selectedRoom.host.displayName : "Host"),
+        },
+      });
+
+      // Update local profile balance & refresh
+      fetchMe();
+      await fetchMessages(selectedRoom.id);
+      await fetchCoinLedger();
+
+      setStageActionMsg(
+        `🎁 Gift Sent! ${gift.emoji} ${gift.name} delivered. -${gift.coinCost} Coins. (New Balance: ${data.senderNewBalance} Coins)`
+      );
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to transfer gift");
+    } finally {
+      setSendingGift(false);
     }
   };
 
@@ -535,6 +784,7 @@ export default function Home() {
     setHandRaised(false);
     setHandPosition(null);
     setHandRaiseQueue([]);
+    setMessages([]);
     setStageActionMsg("Disconnected from stage");
     fetchRooms();
   };
@@ -550,6 +800,7 @@ export default function Home() {
       setSelectedRoom(null);
       setActiveToken(null);
       setHandRaiseQueue([]);
+      setMessages([]);
       setStageActionMsg("Audio room ended by Host. Redis keys and LiveKit SFU room closed.");
       fetchRooms();
     } catch (err: unknown) {
@@ -568,19 +819,28 @@ export default function Home() {
   useEffect(() => {
     if (user?.id) {
       refreshPresence(user.id);
+      fetchCoinLedger();
     }
-  }, [user?.id]);
+  }, [user?.id, fetchCoinLedger]);
 
-  // Periodic polling for active room state (every 2 seconds while inside room)
+  // Periodic polling for active room state & messages (every 2.5 seconds while inside room)
   useEffect(() => {
     if (!selectedRoom?.id) return;
 
     const intervalId = setInterval(() => {
       refreshActiveRoomState(selectedRoom.id);
-    }, 2000);
+      fetchMessages(selectedRoom.id);
+    }, 2500);
 
     return () => clearInterval(intervalId);
-  }, [selectedRoom?.id, refreshActiveRoomState]);
+  }, [selectedRoom?.id, refreshActiveRoomState, fetchMessages]);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    if (activeStageTab === "chat") {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, activeStageTab]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 px-4 py-12 md:px-8 max-w-6xl mx-auto">
@@ -627,7 +887,7 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Day 4 Milestone: LiveKit Audio Infrastructure & Signaling Control Panel */}
+      {/* Day 5 Milestone: In-Room Live Interactive Engagement & Free Virtual Gift Economy */}
       <section className="mt-8">
         <div className="bg-slate-900/70 border border-indigo-500/40 rounded-2xl p-6 shadow-2xl backdrop-blur-md relative overflow-hidden">
           <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -635,12 +895,12 @@ export default function Home() {
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
             <div>
               <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-medium mb-1">
-                <Radio className="w-3.5 h-3.5" />
-                Day 4 Milestone: LiveKit Audio Infrastructure & Signaling (Active)
+                <Gift className="w-3.5 h-3.5 text-pink-400" />
+                Day 5 Milestone: In-Room Live Engagement & Free Virtual Gifts (Active)
               </div>
-              <h2 className="text-xl font-bold text-white">Live Audio Stage & Hand-Raise Queue</h2>
+              <h2 className="text-xl font-bold text-white">Audio Stage, Live Chat & Free Virtual Gifts</h2>
               <p className="text-sm text-slate-400">
-                WebRTC audio rooms, FIFO Redis hand-raise queues, host stage promotions, and LiveKit SFU signaling.
+                Live WebRTC audio, real-time in-room chat, structured language corrections, and 100% free virtual gift economy.
               </p>
             </div>
 
@@ -669,6 +929,21 @@ export default function Home() {
               >
                 Enable Audio 🔊
               </button>
+            </div>
+          )}
+
+          {/* Floating Gift Celebration Banner */}
+          {giftCelebration && (
+            <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-pink-600/30 via-purple-600/30 to-indigo-600/30 border border-pink-500/50 flex items-center justify-between gap-3 text-xs text-white animate-bounce shadow-xl">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">{giftCelebration.emoji}</span>
+                <div>
+                  <span className="font-bold text-pink-300">{giftCelebration.sender}</span> sent a{" "}
+                  <span className="font-bold text-amber-300">{giftCelebration.name}</span> to{" "}
+                  <span className="font-bold text-indigo-300">{giftCelebration.recipient}</span>!
+                </div>
+              </div>
+              <Sparkles className="w-5 h-5 text-amber-300 animate-spin" />
             </div>
           )}
 
@@ -857,9 +1132,22 @@ export default function Home() {
                         {p.isLocal ? "(You)" : p.canPublish ? "Speaker" : "Audience"}
                       </span>
 
+                      {/* Quick Gift Shortcut Button */}
+                      {!p.isLocal && (
+                        <button
+                          onClick={() => {
+                            setSelectedRecipientId(p.identity);
+                            setActiveStageTab("gifts");
+                          }}
+                          className="mt-2 text-[10px] px-2 py-0.5 bg-pink-600/20 hover:bg-pink-600/40 text-pink-300 rounded border border-pink-500/30 flex items-center gap-1 transition-colors"
+                        >
+                          <Gift className="w-2.5 h-2.5" /> Gift
+                        </button>
+                      )}
+
                       {/* Host stage actions on participant */}
                       {activeRole === "host" && !p.isLocal && (
-                        <div className="mt-2 flex items-center gap-1 pt-1 border-t border-slate-800 w-full justify-center">
+                        <div className="mt-1 flex items-center gap-1 pt-1 border-t border-slate-800 w-full justify-center">
                           {p.canPublish ? (
                             <button
                               onClick={() => handleStageAction(p.identity, "demote")}
@@ -882,6 +1170,440 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Day 5 Milestone: In-Room Live Interactive Engagement (Chat, Corrections & Gifting) */}
+              <div className="mt-6 pt-5 border-t border-slate-800">
+                {/* Tabs */}
+                <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
+                  <button
+                    onClick={() => setActiveStageTab("chat")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      activeStageTab === "chat"
+                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    Live Chat & Corrections ({messages.length})
+                  </button>
+
+                  <button
+                    onClick={() => setActiveStageTab("gifts")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      activeStageTab === "gifts"
+                        ? "bg-pink-600 text-white shadow-md shadow-pink-600/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Gift className="w-3.5 h-3.5" />
+                    Send Free Virtual Gift 🎁
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveStageTab("coins");
+                      fetchCoinLedger();
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      activeStageTab === "coins"
+                        ? "bg-amber-600 text-white shadow-md shadow-amber-600/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Coins className="w-3.5 h-3.5" />
+                    Coin Ledger & Free VIP Perks
+                  </button>
+                </div>
+
+                {/* Tab 1: Live Chat & Language Corrections */}
+                {activeStageTab === "chat" && (
+                  <div className="space-y-4">
+                    {/* Messages Scroll Feed */}
+                    <div className="h-64 overflow-y-auto space-y-3 p-3 rounded-xl bg-slate-900/60 border border-slate-800/80">
+                      {messages.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-xs text-slate-500">
+                          <MessageSquare className="w-6 h-6 mb-1 text-slate-600" />
+                          No messages yet. Send a greeting or a language correction to the table!
+                        </div>
+                      ) : (
+                        messages.map((m) => {
+                          const isMe = m.senderId?._id === user?.id;
+
+                          // Render Language Correction
+                          if (m.type === "correction" && m.correctionDetails) {
+                            return (
+                              <div
+                                key={m._id}
+                                className="p-3 rounded-xl bg-amber-950/30 border border-amber-600/40 text-xs shadow-sm"
+                              >
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+                                    <span className="font-bold text-amber-300">
+                                      Language Correction from @{m.senderId?.username || "teacher"}
+                                    </span>
+                                    {m.senderId?.isVip && (
+                                      <Crown className="w-3 h-3 text-amber-400 inline" />
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] text-slate-500">
+                                    {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  </span>
+                                </div>
+
+                                <div className="space-y-1 mt-1 pl-2 border-l-2 border-amber-500/50">
+                                  <div className="text-red-300/90 line-through">
+                                    🔴 Original: &ldquo;{m.correctionDetails.originalText}&rdquo;
+                                  </div>
+                                  <div className="text-emerald-300 font-semibold">
+                                    🟢 Natural phrasing: &ldquo;{m.correctionDetails.correctedText}&rdquo;
+                                  </div>
+                                  {m.correctionDetails.explanation && (
+                                    <div className="text-[11px] text-slate-400 italic">
+                                      💡 Tip: {m.correctionDetails.explanation}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          // Render Gift Celebration
+                          if (m.type === "gift") {
+                            return (
+                              <div
+                                key={m._id}
+                                className="p-2.5 rounded-xl bg-pink-950/30 border border-pink-500/40 text-xs flex items-center justify-between text-pink-200"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Gift className="w-4 h-4 text-pink-400 shrink-0" />
+                                  <span>{m.content}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500">
+                                  {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          // Regular Chat Message
+                          return (
+                            <div
+                              key={m._id}
+                              className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                            >
+                              <div className="flex items-center gap-1.5 mb-0.5 text-[10px] text-slate-400">
+                                <span className="font-semibold text-slate-300">
+                                  {m.senderId?.displayName || m.senderId?.username || "Learner"}
+                                </span>
+                                {m.senderId?.isVip && <Crown className="w-2.5 h-2.5 text-amber-400" />}
+                                <span>• {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                              </div>
+                              <div
+                                className={`px-3 py-1.5 rounded-xl text-xs max-w-sm ${
+                                  isMe
+                                    ? "bg-indigo-600 text-white rounded-tr-none"
+                                    : "bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700"
+                                }`}
+                              >
+                                {m.content}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Mode Toggle & Composer */}
+                    <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsCorrectionMode(false)}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
+                              !isCorrectionMode ? "bg-slate-800 text-white" : "text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            💬 Chat Message
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsCorrectionMode(true)}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
+                              isCorrectionMode
+                                ? "bg-amber-600 text-white"
+                                : "text-amber-400/80 hover:text-amber-300"
+                            }`}
+                          >
+                            <BookOpen className="w-3 h-3" /> Language Correction
+                          </button>
+                        </div>
+                        <span className="text-[10px] text-slate-500">
+                          {isCorrectionMode ? "Highlights grammar tip for all learners" : "In-room discussion"}
+                        </span>
+                      </div>
+
+                      {/* Form */}
+                      <form onSubmit={handleSendMessage} className="space-y-2">
+                        {isCorrectionMode ? (
+                          <div className="space-y-2 pt-1">
+                            <input
+                              type="text"
+                              value={correctionOriginal}
+                              onChange={(e) => setCorrectionOriginal(e.target.value)}
+                              placeholder="Original sentence heard (e.g. 'I has two brother')"
+                              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                            />
+                            <input
+                              type="text"
+                              value={correctionCorrected}
+                              onChange={(e) => setCorrectionCorrected(e.target.value)}
+                              placeholder="Better / Natural phrasing (e.g. 'I have two brothers')"
+                              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                            />
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={correctionExplanation}
+                                onChange={(e) => setCorrectionExplanation(e.target.value)}
+                                placeholder="Grammar tip or explanation (e.g. 'Use 'have' with first person 'I'')"
+                                className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                              />
+                              <button
+                                type="submit"
+                                disabled={sendingMessage}
+                                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors shadow shrink-0 flex items-center gap-1"
+                              >
+                                <Send className="w-3 h-3" /> Post Correction
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={chatInput}
+                              onChange={(e) => setChatInput(e.target.value)}
+                              placeholder="Say something to the table..."
+                              className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                              type="submit"
+                              disabled={sendingMessage || !chatInput.trim()}
+                              className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors shadow shrink-0 flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <Send className="w-3 h-3" /> Send
+                            </button>
+                          </div>
+                        )}
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 2: Send Free Virtual Gifts */}
+                {activeStageTab === "gifts" && (
+                  <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                      <div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                          <Gift className="w-4 h-4 text-pink-400" />
+                          Complimentary Free Virtual Gift Economy
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          Appreciate mentors, speakers, and hosts. 100% Free VIP daily coins — zero payment gateways.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 text-xs font-bold">
+                        <Coins className="w-4 h-4 text-indigo-400" />
+                        Your Coins: {user?.coinsBalance || 0}
+                      </div>
+                    </div>
+
+                    {/* Step 1: Select Stage Recipient */}
+                    <div>
+                      <label className="text-xs font-semibold text-slate-300 mb-2 block">
+                        1. Select Stage Speaker / Host to Gift:
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {participants
+                          .filter((p) => !p.isLocal)
+                          .map((p) => (
+                            <button
+                              key={p.identity}
+                              type="button"
+                              onClick={() => setSelectedRecipientId(p.identity)}
+                              className={`p-2 rounded-lg border text-left flex items-center gap-2 transition-all ${
+                                selectedRecipientId === p.identity
+                                  ? "bg-pink-600/20 border-pink-500 text-white shadow-md shadow-pink-500/20"
+                                  : "bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700"
+                              }`}
+                            >
+                              <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs shrink-0">
+                                {p.name.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="truncate">
+                                <div className="text-xs font-semibold truncate">{p.name}</div>
+                                <div className="text-[10px] text-slate-500">
+                                  {p.identity === selectedRoom.host._id ? "Host" : "Speaker"}
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        {participants.filter((p) => !p.isLocal).length === 0 && (
+                          <div className="col-span-4 p-3 rounded-lg bg-slate-950 text-xs text-slate-500 text-center">
+                            No other speakers are on stage right now. Open another window to test gifting!
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Step 2: Select Gift Item */}
+                    <div>
+                      <label className="text-xs font-semibold text-slate-300 mb-2 block">
+                        2. Choose Free Virtual Gift:
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                        {VIRTUAL_GIFTS.map((g) => (
+                          <button
+                            key={g.id}
+                            type="button"
+                            onClick={() => setSelectedGiftId(g.id)}
+                            className={`p-3 rounded-xl border flex flex-col items-center text-center transition-all ${
+                              selectedGiftId === g.id
+                                ? "bg-pink-950/40 border-pink-500 shadow-lg shadow-pink-500/20 scale-105"
+                                : "bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300"
+                            }`}
+                          >
+                            <span className="text-3xl mb-1">{g.emoji}</span>
+                            <span className="text-xs font-bold text-white">{g.name}</span>
+                            <span className="text-[11px] font-mono font-bold text-amber-400 mt-0.5">
+                              {g.coinCost} Coins
+                            </span>
+                            <span className="text-[9px] text-slate-500 mt-1 line-clamp-1">{g.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Send Button */}
+                    <div className="pt-2 flex items-center justify-between">
+                      <div className="text-[11px] text-slate-400">
+                        ★ Double-entry ledger audit: credits coins to receiver, logs transaction.
+                      </div>
+
+                      <button
+                        onClick={handleSendGift}
+                        disabled={sendingGift || !selectedRecipientId}
+                        className="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-r from-pink-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white font-semibold text-xs rounded-lg transition-all shadow-lg shadow-pink-600/25 disabled:opacity-50"
+                      >
+                        <Gift className="w-3.5 h-3.5" />
+                        {sendingGift ? "Delivering Gift..." : "Send Free Gift 🎁"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 3: Coin Balance & Transaction Audit */}
+                {activeStageTab === "coins" && (
+                  <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                      <div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                          <Coins className="w-4 h-4 text-amber-400" />
+                          Complimentary Coin Balance & Free VIP Economy
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          Complete double-entry audit history of your free signup bonus, daily login rewards, and gift exchanges.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={fetchCoinLedger}
+                        disabled={coinLedgerLoading}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 rounded-lg transition-colors border border-slate-700"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${coinLedgerLoading ? "animate-spin" : ""}`} />
+                        Refresh Ledger
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                        <div className="text-[11px] text-slate-400">Current Balance</div>
+                        <div className="text-xl font-extrabold text-amber-400 mt-0.5">
+                          {user?.coinsBalance || 0} Coins
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">100% Free Daily Tokens</div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                        <div className="text-[11px] text-slate-400">Daily Login Streak</div>
+                        <div className="text-xl font-extrabold text-orange-400 mt-0.5 flex items-center gap-1">
+                          <Flame className="w-5 h-5 text-orange-500" />
+                          {user?.currentStreak || 1} Days
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">+500 coins rewarded daily</div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                        <div className="text-[11px] text-slate-400">VIP Membership Status</div>
+                        <div className="text-xl font-extrabold text-indigo-400 mt-0.5 flex items-center gap-1">
+                          <Crown className="w-5 h-5 text-amber-400" />
+                          VIP Active (Free)
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">Custom banners & unlimited stages</div>
+                      </div>
+                    </div>
+
+                    {/* Transaction History Table */}
+                    <div>
+                      <div className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                        <History className="w-3.5 h-3.5 text-indigo-400" />
+                        Recent Coin Transactions Audit (Last 30 Events)
+                      </div>
+
+                      <div className="max-h-48 overflow-y-auto space-y-1.5">
+                        {coinTransactions.length === 0 ? (
+                          <div className="p-4 text-center rounded-lg bg-slate-950 text-xs text-slate-500">
+                            No coin transactions logged yet.
+                          </div>
+                        ) : (
+                          coinTransactions.map((tx) => (
+                            <div
+                              key={tx._id}
+                              className="p-2.5 rounded-lg bg-slate-950 border border-slate-850 flex items-center justify-between text-xs"
+                            >
+                              <div>
+                                <div className="font-semibold text-white">{tx.description}</div>
+                                <div className="text-[10px] text-slate-500">
+                                  Type: <span className="font-mono text-slate-400">{tx.type}</span> •{" "}
+                                  {new Date(tx.createdAt).toLocaleString()}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div
+                                  className={`font-bold font-mono ${
+                                    tx.amount > 0 ? "text-emerald-400" : "text-red-400"
+                                  }`}
+                                >
+                                  {tx.amount > 0 ? `+${tx.amount}` : tx.amount} Coins
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  Balance: {tx.balanceAfter}
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -1578,13 +2300,13 @@ export default function Home() {
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 mb-4">
               <Crown className="w-5 h-5" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-2">Free VIP & Coins</h3>
+            <h3 className="text-lg font-bold text-white mb-2">Free VIP & Gifts</h3>
             <p className="text-sm text-slate-400 leading-relaxed">
               All paid features unlocked for free. Send virtual gifts to speakers using complimentary daily coins with zero payment gateways.
             </p>
           </div>
-          <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-amber-400">
-            Unlocked by Default <Sparkles className="w-3.5 h-3.5" />
+          <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-pink-400">
+            Active in Day 5 <Sparkles className="w-3.5 h-3.5" />
           </div>
         </div>
 
