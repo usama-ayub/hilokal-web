@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db";
 import { redis } from "@/lib/redis";
-import { minioClient, STORAGE_BUCKETS, ensureBucketsExist } from "@/lib/storage";
+import { ensureBucketsExist } from "@/lib/storage";
 
 export async function GET() {
   const healthReport = {
@@ -10,7 +10,7 @@ export async function GET() {
     services: {
       mongodb: { status: "unknown", latencyMs: 0 },
       redis: { status: "unknown", latencyMs: 0 },
-      minio: { status: "unknown", latencyMs: 0 },
+      storage: { status: "unknown", latencyMs: 0 },
       livekit: { status: "configured", wsUrl: process.env.NEXT_PUBLIC_LIVEKIT_WS_URL },
     },
   };
@@ -55,19 +55,18 @@ export async function GET() {
     healthReport.status = "degraded";
   }
 
-  // 3. Test MinIO Storage Connection & Ensure Buckets
-  const minioStart = Date.now();
+  // 3. Test Local Media Storage Directories
+  const storageStart = Date.now();
   try {
     await ensureBucketsExist();
-    const exists = await minioClient.bucketExists(STORAGE_BUCKETS.AVATARS);
-    healthReport.services.minio = {
-      status: exists ? "connected_and_bucket_ready" : "connected_bucket_missing",
-      latencyMs: Date.now() - minioStart,
+    healthReport.services.storage = {
+      status: "ready (local disk /public/uploads)",
+      latencyMs: Date.now() - storageStart,
     };
   } catch (err: unknown) {
-    healthReport.services.minio = {
+    healthReport.services.storage = {
       status: `error: ${err instanceof Error ? err.message : String(err)}`,
-      latencyMs: Date.now() - minioStart,
+      latencyMs: Date.now() - storageStart,
     };
     healthReport.status = "degraded";
   }

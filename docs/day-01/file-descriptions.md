@@ -8,7 +8,7 @@ This document provides a comprehensive description of every file created during 
 
 ### `docs/architecture/system-design.md`
 * **Role:** High-level blueprint of the entire platform.
-* **Details:** Illustrates the data flow between client browsers, Next.js API layer, LiveKit SFU media server, Redis cache/state cluster, MongoDB persistence, MinIO storage, and Google Gemini AI API.
+* **Details:** Illustrates the data flow between client browsers, Next.js API layer, LiveKit SFU media server, Redis cache/state cluster, MongoDB persistence, Local Media Storage, and Google Gemini AI API.
 * **Connection:** Serves as the master architectural reference for all subsequent development phases.
 
 ### `docs/architecture/database-schema.md`
@@ -28,11 +28,10 @@ This document provides a comprehensive description of every file created during 
 ### `docker-compose.yml`
 * **Role:** Multi-container Docker orchestration for local development.
 * **Services Included:**
-  * `mongodb`: MongoDB 7.0 database running on port `27017`.
-  * `redis`: Redis 7.2 running on port `6379` with password protection.
-  * `minio`: MinIO S3 object storage server running on ports `9000` (API) and `9001` (Web Console).
-  * `minio-init`: Ephemeral container that configures MinIO and initializes the `avatars`, `room-banners`, and `audio-bios` buckets with public download policies.
+  * `mongodb`: MongoDB database running on port `27017` with persistent volumes.
+  * `redis`: Redis running on port `6379` with password protection.
   * `livekit`: LiveKit SFU WebRTC audio server running on ports `7880` (Signaling), `7881` (TCP fallback), and `50000-50050/udp` (Audio RTP traffic).
+* **Architectural Note:** MinIO container was intentionally eliminated to avoid Docker Hub removal issues and registry 401 unauthorized errors. Media files (avatars, banners, audio bios) are served natively through local disk storage.
 * **Connection:** Powers all local backend services required by the application.
 
 ### `docker/livekit.yaml`
@@ -42,12 +41,12 @@ This document provides a comprehensive description of every file created during 
 
 ### `.env.example` & `.env.local`
 * **Role:** Environment configuration templates.
-* **Details:** Specifies all connection strings, secrets, and URLs for MongoDB, Redis, MinIO, LiveKit, JWT authentication, and Google Gemini.
+* **Details:** Specifies all connection strings, secrets, and URLs for MongoDB, Redis, Local Media Storage, LiveKit, JWT authentication, and Google Gemini.
 * **Connection:** Loaded by Next.js and backend modules to access configuration securely.
 
 ### `package.json`
 * **Role:** Project manifest and dependencies list.
-* **Details:** Contains modern, stable versions of Next.js 15, React 19, LiveKit Client & Server SDKs, Mongoose, IORedis, MinIO client, Tailwind CSS, BullMQ, and Lucide React.
+* **Details:** Contains modern, stable versions of Next.js 15, React 19, LiveKit Client & Server SDKs, Mongoose, IORedis, Tailwind CSS, BullMQ, and Lucide React.
 * **Connection:** Read by `npm` / `pnpm` / `yarn` to install all dependencies.
 
 ### `tsconfig.json`
@@ -80,9 +79,9 @@ This document provides a comprehensive description of every file created during 
 * **Connection:** Used by presence services, hand-raise queue managers, and rate limiters.
 
 ### `src/lib/storage.ts`
-* **Role:** Object storage (MinIO/S3) client and presigned URL generator.
-* **Details:** Exports helper functions `getPresignedUploadUrl(...)` for direct browser-to-MinIO uploads and `getPublicMediaUrl(...)` for fetching avatar/audio URLs.
-* **Connection:** Used by profile update and room creation endpoints to handle avatars, room banners, and audio bios without routing heavy file bytes through the Node.js server.
+* **Role:** Local Media Storage manager with zero Docker dependencies.
+* **Details:** Automatically creates `/public/uploads/{avatars, room-banners, audio-bios}` directories on disk, saves file buffers, and generates public URLs served natively by Next.js.
+* **Connection:** Used by profile update and room creation endpoints to handle avatars, room banners, and audio bios.
 
 ### `src/lib/livekit.ts`
 * **Role:** LiveKit WebRTC access token generator.
@@ -105,10 +104,10 @@ This document provides a comprehensive description of every file created during 
 
 ### `src/app/api/health/route.ts`
 * **Role:** System diagnostics API endpoint.
-* **Details:** Executes live pings against MongoDB, Redis, and MinIO storage, reporting connectivity status and response latency in milliseconds.
-* **Connection:** Queried by `src/app/page.tsx` to verify that all Docker services are running properly.
+* **Details:** Executes live checks against MongoDB, Redis, and Local Media Storage, reporting connectivity status and response latency in milliseconds.
+* **Connection:** Queried by `src/app/page.tsx` to verify that all local services are running properly.
 
 ### `src/app/page.tsx`
 * **Role:** Developer dashboard and landing page.
-* **Details:** Displays platform badges (Free VIP Unlocked, 500 Daily Free Coins), shows live real-time status cards for each local service (MongoDB, Redis, MinIO, LiveKit), and outlines upcoming milestones.
+* **Details:** Displays platform badges (Free VIP Unlocked, 500 Daily Free Coins), shows live real-time status cards for each local service (MongoDB, Redis, Media Storage, LiveKit), and outlines upcoming milestones.
 * **Connection:** Rendered when visiting `http://localhost:3000`.

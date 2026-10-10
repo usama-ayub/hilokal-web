@@ -1,80 +1,54 @@
-import * as Minio from "minio";
-
-const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || "localhost";
-const MINIO_PORT = Number(process.env.MINIO_PORT) || 9000;
-const MINIO_USE_SSL = process.env.MINIO_USE_SSL === "true";
-const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || "minioadmin";
-const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || "minioadminpassword123";
-
-/**
- * MinIO S3-Compatible Client Singleton
- */
-export const minioClient = new Minio.Client({
-  endPoint: MINIO_ENDPOINT,
-  port: MINIO_PORT,
-  useSSL: MINIO_USE_SSL,
-  accessKey: MINIO_ACCESS_KEY,
-  secretKey: MINIO_SECRET_KEY,
-});
+import fs from "fs";
+import path from "path";
 
 export const STORAGE_BUCKETS = {
-  AVATARS: process.env.MINIO_BUCKET_AVATARS || "avatars",
-  ROOM_BANNERS: process.env.MINIO_BUCKET_BANNERS || "room-banners",
-  AUDIO_BIOS: process.env.MINIO_BUCKET_AUDIO_BIOS || "audio-bios",
+  AVATARS: "avatars",
+  ROOM_BANNERS: "room-banners",
+  AUDIO_BIOS: "audio-bios",
 } as const;
 
+export type StorageBucket = (typeof STORAGE_BUCKETS)[keyof typeof STORAGE_BUCKETS];
+
+const UPLOADS_ROOT = path.join(process.cwd(), "public", "uploads");
+
 /**
- * Automatically ensure that required MinIO buckets exist and configure public read policies.
- * Eliminates the need for external `mc` CLI or auxiliary init containers.
+ * Automatically ensures that local upload directories exist on disk.
+ * Eliminates the need for any external MinIO container or Docker dependencies.
  */
 export async function ensureBucketsExist(): Promise<void> {
   const buckets = Object.values(STORAGE_BUCKETS);
 
   for (const bucket of buckets) {
-    try {
-      const exists = await minioClient.bucketExists(bucket);
-      if (!exists) {
-        await minioClient.makeBucket(bucket, "us-east-1");
-        console.log(`Created MinIO storage bucket: ${bucket}`);
-
-        // Set public read policy for avatars and room banners
-        if (bucket === STORAGE_BUCKETS.AVATARS || bucket === STORAGE_BUCKETS.ROOM_BANNERS) {
-          const publicPolicy = {
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Effect: "Allow",
-                Principal: "*",
-                Action: ["s3:GetObject"],
-                Resource: [`arn:aws:s3:::${bucket}/*`],
-              },
-            ],
-          };
-          await minioClient.setBucketPolicy(bucket, JSON.stringify(publicPolicy));
-        }
-      }
-    } catch (err) {
-      console.error(`Error ensuring MinIO bucket ${bucket}:`, err);
+    const dirPath = path.join(UPLOADS_ROOT, bucket);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      console.log(`Created local media directory: ${dirPath}`);
     }
   }
 }
 
 /**
- * Generate a pre-signed PUT URL so client browsers can upload files directly to MinIO
- * without stressing the Node.js API server RAM or CPU.
+ * Returns a public URL for a file stored either locally or in remote storage.
  */
-export async function getPresignedUploadUrl(
-  bucket: string,
-  objectKey: string,
-  expirySeconds: number = 900
-): Promise<string> {
-  return await minioClient.presignedPutObject(bucket, objectKey, expirySeconds);
+export function getPublicMediaUrl(bucket: string, objectKey: string): string {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  return `${appUrl}/uploads/${bucket}/${objectKey}`;
 }
 
 /**
- * Construct the public download URL for an uploaded file
+ * Save an uploaded file buffer directly to disk.
  */
-export function getPublicMediaUrl(bucket: string, objectKey: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_STORAGE_BASE_URL || `http://${MINIO_ENDPOINT}:${MINIO_PORT}`;
-  return `${baseUrl}/${bucket}/${objectKey}`;
+export async function saveLocalMedia(
+  bucket: string,
+  fileName: string,
+  buffer: Buffer
+): Promise<{ url: string; path: string }> {
+  await ensureBucketsExist();
+  const filePath = path.join(UPLOADS_ROOT, bucket, fileName);
+  await fs.promises.writeFile(filePath, buffer);
+
+  return {
+    url: getPublicMediaUrl(bucket, fileName),
+    path: filePath,
+  };
 }

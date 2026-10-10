@@ -35,26 +35,7 @@ services:
       - hilokal-network
 
   # ========================================================
-  # 3. MinIO (S3-Compatible Object Storage for Images/Audio)
-  # ========================================================
-  minio:
-    image: minio/minio:latest
-    container_name: hilokal-minio
-    restart: always
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web Console
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadminpassword123
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
-    networks:
-      - hilokal-network
-
-  # ========================================================
-  # 4. LiveKit WebRTC Audio Server (SFU)
+  # 3. LiveKit WebRTC Audio Server (SFU)
   # ========================================================
   livekit:
     image: livekit/livekit-server:latest
@@ -77,4 +58,3 @@ networks:
 volumes:
   mongodb_data:
   redis_data:
-  minio_data:

@@ -29,7 +29,7 @@ interface HealthData {
   services: {
     mongodb: ServiceHealth;
     redis: ServiceHealth;
-    minio: ServiceHealth;
+    storage: ServiceHealth;
     livekit: ServiceHealth;
   };
 }
@@ -167,14 +167,14 @@ export default function Home() {
               )}
             </div>
 
-            {/* MinIO Storage */}
+            {/* Media Storage */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2 text-slate-300 font-medium text-sm">
                   <HardDrive className="w-4 h-4 text-pink-400" />
-                  MinIO (S3)
+                  Media Storage
                 </div>
-                {health?.services.minio.status?.includes("connected") ? (
+                {health?.services.storage.status?.includes("ready") ? (
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 ) : (
                   <AlertCircle className="w-4 h-4 text-amber-400" />
@@ -182,12 +182,12 @@ export default function Home() {
               </div>
               <div className="text-xs text-slate-400">
                 Status:{" "}
-                <span className={health?.services.minio.status?.includes("connected") ? "text-emerald-400 font-medium" : "text-amber-400"}>
-                  {health ? health.services.minio.status : "Waiting for Docker..."}
+                <span className={health?.services.storage.status?.includes("ready") ? "text-emerald-400 font-medium" : "text-amber-400"}>
+                  {health ? health.services.storage.status : "Checking storage..."}
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
-                Direct uploads enabled
+                Zero-Docker local disk uploads
               </div>
             </div>
 

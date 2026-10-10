@@ -18,13 +18,13 @@ docker compose up -d
 ```
 
 ### What this starts:
-* **MongoDB:** `localhost:27017`
-* **Redis:** `localhost:6379`
-* **MinIO S3 API:** `localhost:9000`
-* **MinIO Web Console:** `http://localhost:9001` (User: `minioadmin` / Pass: `minioadminpassword123`)
-* **LiveKit WebRTC Server:** `localhost:7880`
+* **MongoDB:** `localhost:27017` (Database persistence)
+* **Redis:** `localhost:6379` (In-memory presence, audio state & hand-raise queues)
+* **LiveKit WebRTC Server:** `localhost:7880` (Real-time audio streaming)
 
-To verify all containers are healthy:
+*(Note: Media storage is handled natively via `/public/uploads` on local disk, requiring zero MinIO container overhead or Docker image pulls).*
+
+To verify all containers are running:
 ```powershell
 docker ps
 ```
@@ -50,14 +50,4 @@ Open your browser and navigate to:
 http://localhost:3000
 ```
 
-You will see the **Hilokal Web Clone Dashboard** with real-time green checkmarks confirming active connections to MongoDB, Redis, MinIO S3, and LiveKit.
-
----
-
-## Step 4: Accessing MinIO Console (Optional)
-If you want to view uploaded profile avatars, audio bios, or room banners:
-1. Open `http://localhost:9001` in your browser.
-2. Sign in with:
-   * **Username:** `minioadmin`
-   * **Password:** `minioadminpassword123`
-3. You will see the automatically created buckets: `avatars`, `audio-bios`, and `room-banners`.
+You will see the **Hilokal Web Clone Dashboard** with real-time green checkmarks confirming active connections to MongoDB, Redis, Local Media Storage, and LiveKit.
