@@ -1,20 +1,23 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { 
-  Headphones, 
-  Sparkles, 
-  Crown, 
-  Coins, 
-  Server, 
-  Database, 
-  Radio, 
-  HardDrive, 
-  CheckCircle2, 
+import {
+  Headphones,
+  Sparkles,
+  Crown,
+  Coins,
+  Server,
+  Database,
+  Radio,
+  HardDrive,
+  CheckCircle2,
   AlertCircle,
   RefreshCw,
   Layers,
-  ArrowRight
+  ArrowRight,
+  UploadCloud,
+  FileCode2,
+  Send,
 } from "lucide-react";
 
 interface ServiceHealth {
@@ -34,9 +37,28 @@ interface HealthData {
   };
 }
 
+interface DbTestResult {
+  status: string;
+  message: string;
+  models?: Record<string, { status: string; count: number }>;
+  data?: {
+    user: { id: string; username: string; isVip: boolean; coinsBalance: number };
+    languages: string[];
+    room: { id: string; title: string; status: string };
+    transaction: { amount: number; type: string };
+  };
+}
+
 export default function Home() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // Day 2 Interactive State
+  const [dbStatus, setDbStatus] = useState<DbTestResult | null>(null);
+  const [dbLoading, setDbLoading] = useState<boolean>(false);
+  const [uploading, setUploading] = useState<boolean>(false);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const checkHealth = async () => {
     setLoading(true);
@@ -51,8 +73,57 @@ export default function Home() {
     }
   };
 
+  const testDbModels = async (seed: boolean = false) => {
+    setDbLoading(true);
+    try {
+      const res = await fetch("/api/test-db", {
+        method: seed ? "POST" : "GET",
+      });
+      const data = await res.json();
+      setDbStatus(data);
+    } catch (err) {
+      setDbStatus({
+        status: "error",
+        message: err instanceof Error ? err.message : "Failed to connect to database models",
+      });
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setUploadSuccess(null);
+    setUploadError(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "avatars");
+
+    try {
+      const res = await fetch("/api/media/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+      setUploadSuccess(data.url);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   useEffect(() => {
     checkHealth();
+    testDbModels(false);
   }, []);
 
   return (
@@ -93,13 +164,13 @@ export default function Home() {
         <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-medium mb-1">
-                <Layers className="w-3.5 h-3.5" />
-                Day 1 Milestone: Foundation & Architecture
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-medium mb-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Day 1 Milestone: Foundation & Architecture (Completed & Resolved)
               </div>
               <h2 className="text-xl font-bold text-white">Local Infrastructure Status</h2>
               <p className="text-sm text-slate-400">
-                Verifying connection to local Docker services (MongoDB, Redis, MinIO S3, LiveKit SFU).
+                Verifying connection to MongoDB, Redis, Local Media Storage, and LiveKit SFU.
               </p>
             </div>
 
@@ -130,7 +201,13 @@ export default function Home() {
               </div>
               <div className="text-xs text-slate-400">
                 Status:{" "}
-                <span className={health?.services.mongodb.status === "connected" ? "text-emerald-400 font-medium" : "text-amber-400"}>
+                <span
+                  className={
+                    health?.services.mongodb.status === "connected"
+                      ? "text-emerald-400 font-medium"
+                      : "text-amber-400"
+                  }
+                >
                   {health ? health.services.mongodb.status : "Waiting for Docker..."}
                 </span>
               </div>
@@ -156,7 +233,13 @@ export default function Home() {
               </div>
               <div className="text-xs text-slate-400">
                 Status:{" "}
-                <span className={health?.services.redis.status === "connected" ? "text-emerald-400 font-medium" : "text-amber-400"}>
+                <span
+                  className={
+                    health?.services.redis.status === "connected"
+                      ? "text-emerald-400 font-medium"
+                      : "text-amber-400"
+                  }
+                >
                   {health ? health.services.redis.status : "Waiting for Docker..."}
                 </span>
               </div>
@@ -182,7 +265,13 @@ export default function Home() {
               </div>
               <div className="text-xs text-slate-400">
                 Status:{" "}
-                <span className={health?.services.storage.status?.includes("ready") ? "text-emerald-400 font-medium" : "text-amber-400"}>
+                <span
+                  className={
+                    health?.services.storage.status?.includes("ready")
+                      ? "text-emerald-400 font-medium"
+                      : "text-amber-400"
+                  }
+                >
                   {health ? health.services.storage.status : "Checking storage..."}
                 </span>
               </div>
@@ -207,6 +296,144 @@ export default function Home() {
                 Sub-100ms WebRTC ready
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Day 2: Domain Data Models & Media Storage Pipeline */}
+      <section className="mt-8">
+        <div className="bg-slate-900/60 border border-indigo-900/40 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
+            <div>
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-medium mb-1">
+                <Layers className="w-3.5 h-3.5" />
+                Day 2 Milestone: Domain Data Models & Media Storage Pipeline
+              </div>
+              <h2 className="text-xl font-bold text-white">7 Mongoose Models & Storage Engine</h2>
+              <p className="text-sm text-slate-400">
+                Data models with Free VIP defaults, 500 coin economy, and multipart image/audio storage.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => testDbModels(false)}
+                disabled={dbLoading}
+                className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-medium rounded-lg transition-colors border border-slate-700"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${dbLoading ? "animate-spin" : ""}`} />
+                Check Models
+              </button>
+              <button
+                onClick={() => testDbModels(true)}
+                disabled={dbLoading}
+                className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white rounded-lg transition-colors shadow-lg shadow-indigo-600/20"
+              >
+                <Send className="w-3.5 h-3.5" />
+                Seed Test Learner
+              </button>
+            </div>
+          </div>
+
+          {/* Model Catalog Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+            {[
+              { name: "User", desc: "Free VIP & 500 Coins", countKey: "User" },
+              { name: "UserLanguage", desc: "CEFR A1-C2", countKey: "UserLanguage" },
+              { name: "Room", desc: "Audio Tables", countKey: "Room" },
+              { name: "ScheduledTable", desc: "Events & RSVP", countKey: "ScheduledTable" },
+              { name: "RoomMessage", desc: "Chat & Corrections", countKey: "RoomMessage" },
+              { name: "AiSummary", desc: "Gemini Flashcards", countKey: "AiSummary" },
+              { name: "CoinTransaction", desc: "Gift & Coin Ledger", countKey: "CoinTransaction" },
+            ].map((m) => {
+              const modelData = dbStatus?.models?.[m.countKey];
+              return (
+                <div
+                  key={m.name}
+                  className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-bold text-white font-mono">{m.name}</span>
+                      <FileCode2 className="w-3.5 h-3.5 text-indigo-400" />
+                    </div>
+                    <div className="text-[10px] text-slate-400">{m.desc}</div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-slate-900 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-500">Docs:</span>
+                    <span className="text-emerald-400 font-semibold font-mono">
+                      {modelData ? modelData.count : "..."}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Seed Feedback Card */}
+          {dbStatus?.data && (
+            <div className="p-4 mb-6 rounded-xl bg-emerald-950/30 border border-emerald-800/50 text-xs">
+              <div className="flex items-center gap-2 text-emerald-400 font-semibold mb-2">
+                <CheckCircle2 className="w-4 h-4" />
+                Live Mongoose Test Seed Created:
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-slate-300">
+                <div>
+                  <span className="text-slate-500">User:</span> {dbStatus.data.user.username} (VIP:{" "}
+                  {dbStatus.data.user.isVip ? "Yes" : "No"})
+                </div>
+                <div>
+                  <span className="text-slate-500">Free Coins Balance:</span>{" "}
+                  <span className="text-indigo-400 font-bold">
+                    {dbStatus.data.user.coinsBalance} Coins
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Active Room:</span> {dbStatus.data.room.title}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Media Upload Test Pipeline */}
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-slate-200 font-semibold text-sm">
+                  <UploadCloud className="w-4 h-4 text-pink-400" />
+                  Media Storage Test Pipeline (Avatars, Room Banners & Audio Bios)
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Tests multipart upload via <code className="text-indigo-400">/api/media/upload</code> directly to <code className="text-indigo-400">public/uploads/</code>.
+                </p>
+              </div>
+
+              <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-pink-600 hover:bg-pink-500 text-xs font-semibold text-white rounded-lg transition-colors shadow-lg shadow-pink-600/20">
+                <UploadCloud className={`w-3.5 h-3.5 ${uploading ? "animate-spin" : ""}`} />
+                {uploading ? "Uploading..." : "Upload Test Image"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                  disabled={uploading}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {uploadSuccess && (
+              <div className="mt-3 p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-xs text-emerald-300 flex items-center justify-between gap-2">
+                <span>Upload Successful! Public URL: <a href={uploadSuccess} target="_blank" rel="noreferrer" className="underline text-indigo-400">{uploadSuccess}</a></span>
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              </div>
+            )}
+
+            {uploadError && (
+              <div className="mt-3 p-3 rounded-lg bg-red-950/40 border border-red-800/40 text-xs text-red-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>Upload Failed: {uploadError}</span>
+              </div>
+            )}
           </div>
         </div>
       </section>
