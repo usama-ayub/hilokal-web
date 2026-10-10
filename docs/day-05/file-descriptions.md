@@ -6,12 +6,20 @@ This document details all files created and modified during **Day 05 (In-Room Li
 
 ## 1. Core Services & Domain Utilities
 
-### [`src/lib/gifts.ts`](file:///D:/Project/Hilokal%20Clone/src/lib/gifts.ts)
-* **Purpose:** Virtual gift catalog definition and atomic double-entry balance transfer engine.
+### [`src/lib/gifts-catalog.ts`](file:///D:/Project/Hilokal%20Clone/src/lib/gifts-catalog.ts)
+* **Purpose:** Pure, client-safe definition of the virtual gift catalog and TypeScript interfaces with zero Node.js server dependencies.
 * **Key Components:**
   * `VIRTUAL_GIFTS`: Catalog of 5 appreciation gifts (`coffee`, `rose`, `trophy`, `crown`, `diamond`) with costs, descriptions, and animation styles.
   * `getGiftById`: Lookup utility for gift items.
+  * `GiftItem`: Shared interface for client and server.
+
+### [`src/lib/gifts.ts`](file:///D:/Project/Hilokal%20Clone/src/lib/gifts.ts)
+* **Purpose:** Server-side virtual gift atomic double-entry balance transfer engine.
+* **Key Components:**
   * `transferVirtualGift`: Core business logic executing balance checks, deducting coins from sender, crediting coins to recipient, logging double-entry `CoinTransaction` records, creating an in-room `RoomMessage` gift record, and publishing to Redis Pub/Sub channel `room:{id}:events`.
+
+### [`next.config.mjs`](file:///D:/Project/Hilokal%20Clone/next.config.mjs)
+* **Purpose:** Next.js build configuration specifying `serverExternalPackages: ["ioredis", "mongoose", "bcryptjs", "livekit-server-sdk"]` to ensure server-side packages are never bundled into client bundles.
 
 ---
 

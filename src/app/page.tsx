@@ -49,7 +49,7 @@ import {
 import { useAuthStore } from "@/store/useAuthStore";
 import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
 import { useLiveKitRoom } from "@/hooks/useLiveKitRoom";
-import { VIRTUAL_GIFTS, GiftItem } from "@/lib/gifts";
+import { VIRTUAL_GIFTS, GiftItem } from "@/lib/gifts-catalog";
 
 interface ServiceHealth {
   status: string;
