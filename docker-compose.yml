@@ -47,7 +47,7 @@ services:
       - "50000-50050:50000-50050/udp" # WebRTC UDP traffic
     volumes:
       - ./docker/livekit.yaml:/etc/livekit.yaml
-    command: --config /etc/livekit.yaml
+    command: --config /etc/livekit.yaml --node-ip 127.0.0.1
     networks:
       - hilokal-network
 

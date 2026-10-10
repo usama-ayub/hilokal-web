@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   Headphones,
   Sparkles,
@@ -34,6 +34,10 @@ import {
   Users,
   Award,
   Zap,
+  VolumeX,
+  Bell,
+  Check,
+  X,
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
 import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
@@ -91,6 +95,18 @@ interface ActiveRoomItem {
   };
 }
 
+interface QueuedUser {
+  user: {
+    _id?: string;
+    id?: string;
+    username?: string;
+    displayName?: string;
+    avatarUrl?: string;
+    isVip?: boolean;
+  };
+  raisedAt: number;
+}
+
 export default function Home() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -128,20 +144,95 @@ export default function Home() {
   const [activeRole, setActiveRole] = useState<"host" | "speaker" | "listener">("listener");
   const [handRaised, setHandRaised] = useState<boolean>(false);
   const [handPosition, setHandPosition] = useState<number | null>(null);
+  const [handRaiseQueue, setHandRaiseQueue] = useState<QueuedUser[]>([]);
   const [stageActionMsg, setStageActionMsg] = useState<string | null>(null);
   const [newRoomTitle, setNewRoomTitle] = useState<string>("Spanish & English Cafe ☕");
   const [newRoomLang, setNewRoomLang] = useState<string>("es");
   const [creatingRoom, setCreatingRoom] = useState<boolean>(false);
 
+  // Forward ref for stage refresh
+  const selectedRoomIdRef = useRef<string | null>(null);
+  selectedRoomIdRef.current = selectedRoom?.id || null;
+
+  const refreshActiveRoomState = useCallback(async (roomId: string) => {
+    try {
+      const res = await fetch(`/api/rooms/${roomId}`);
+      const data = await res.json();
+      if (data.success && data.realtime) {
+        setHandRaiseQueue(data.realtime.handRaiseQueue || []);
+
+        // Sync current user's role
+        const currentUserId = user?.id;
+        if (currentUserId) {
+          const isHost = data.room?.host?._id === currentUserId || data.room?.host?.id === currentUserId;
+          const isSpeaker = data.realtime.speakers?.some(
+            (s: { _id?: string; id?: string }) => (s._id || s.id) === currentUserId
+          );
+
+          if (isHost) {
+            setActiveRole("host");
+          } else if (isSpeaker) {
+            setActiveRole("speaker");
+            setHandRaised(false);
+          } else {
+            setActiveRole("listener");
+            // Check queue status
+            const queueIndex = data.realtime.handRaiseQueue.findIndex(
+              (q: QueuedUser) => (q.user._id || q.user.id) === currentUserId
+            );
+            if (queueIndex !== -1) {
+              setHandRaised(true);
+              setHandPosition(queueIndex + 1);
+            } else {
+              setHandRaised(false);
+              setHandPosition(null);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to refresh active room state:", err);
+    }
+  }, [user?.id]);
+
+  // Handle incoming in-room data packets from peers
+  const handleDataReceived = useCallback((packet: Record<string, unknown>) => {
+    const currentId = selectedRoomIdRef.current;
+    if (currentId) {
+      refreshActiveRoomState(currentId);
+    }
+    if (packet.message) {
+      setStageActionMsg(String(packet.message));
+    }
+  }, [refreshActiveRoomState]);
+
+  const handlePermissionsChanged = useCallback((canPublish: boolean) => {
+    if (canPublish) {
+      setActiveRole("speaker");
+      setHandRaised(false);
+      setStageActionMsg("🎉 You have been promoted to Speaker! Unmute your mic to speak.");
+    } else {
+      setActiveRole("listener");
+    }
+    const currentId = selectedRoomIdRef.current;
+    if (currentId) refreshActiveRoomState(currentId);
+  }, [refreshActiveRoomState]);
+
   const {
     isConnected: isWebRtcConnected,
     isConnecting: isWebRtcConnecting,
     isMuted,
+    isAudioPlaybackAllowed,
     participants,
     connect: connectWebRtc,
     disconnect: disconnectWebRtc,
     toggleMicrophone,
-  } = useLiveKitRoom();
+    startAudio,
+    broadcastData,
+  } = useLiveKitRoom({
+    onDataReceived: handleDataReceived,
+    onPermissionsChanged: handlePermissionsChanged,
+  });
 
   const checkHealth = async () => {
     setLoading(true);
@@ -341,6 +432,9 @@ export default function Home() {
       // Connect to LiveKit SFU WebRTC
       await connectWebRtc(data.wsUrl, data.token);
       setStageActionMsg(`Connected to audio table as ${data.role.toUpperCase()}`);
+
+      // Refresh in-memory queue & state
+      await refreshActiveRoomState(roomId);
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Failed to connect to room");
     }
@@ -369,6 +463,17 @@ export default function Home() {
         setHandPosition(null);
         setStageActionMsg("Hand lowered");
       }
+
+      // Broadcast real-time event to all peers in room
+      await broadcastData({
+        type: "HAND_RAISE",
+        userId: user?.id,
+        username: user?.username,
+        action: nextAction,
+      });
+
+      // Immediately refresh local state
+      await refreshActiveRoomState(selectedRoom.id);
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Hand raise failed");
     }
@@ -388,9 +493,35 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || "Action failed");
 
       setStageActionMsg(`Host Action: ${data.message}`);
+
+      // Broadcast promotion/demotion to all peers
+      await broadcastData({
+        type: "STAGE_ACTION",
+        targetUserId,
+        action,
+        message: data.message,
+      });
+
+      await refreshActiveRoomState(selectedRoom.id);
       await fetchRooms();
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Stage action failed");
+    }
+  };
+
+  const dismissQueuedUser = async (targetUserId: string) => {
+    if (!selectedRoom) return;
+    try {
+      // Lower hand for target user
+      await fetch(`/api/rooms/${selectedRoom.id}/hand-raise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "lower", userId: targetUserId }),
+      });
+      await broadcastData({ type: "HAND_DISMISSED", targetUserId });
+      await refreshActiveRoomState(selectedRoom.id);
+    } catch (err) {
+      console.warn("Failed to dismiss queued user:", err);
     }
   };
 
@@ -403,6 +534,7 @@ export default function Home() {
     setActiveToken(null);
     setHandRaised(false);
     setHandPosition(null);
+    setHandRaiseQueue([]);
     setStageActionMsg("Disconnected from stage");
     fetchRooms();
   };
@@ -417,6 +549,7 @@ export default function Home() {
       await disconnectWebRtc();
       setSelectedRoom(null);
       setActiveToken(null);
+      setHandRaiseQueue([]);
       setStageActionMsg("Audio room ended by Host. Redis keys and LiveKit SFU room closed.");
       fetchRooms();
     } catch (err: unknown) {
@@ -424,6 +557,7 @@ export default function Home() {
     }
   };
 
+  // Initial data load
   useEffect(() => {
     checkHealth();
     testDbModels(false);
@@ -436,6 +570,17 @@ export default function Home() {
       refreshPresence(user.id);
     }
   }, [user?.id]);
+
+  // Periodic polling for active room state (every 2 seconds while inside room)
+  useEffect(() => {
+    if (!selectedRoom?.id) return;
+
+    const intervalId = setInterval(() => {
+      refreshActiveRoomState(selectedRoom.id);
+    }, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [selectedRoom?.id, refreshActiveRoomState]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 px-4 py-12 md:px-8 max-w-6xl mx-auto">
@@ -511,6 +656,22 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Autoplay Unlock Notice (if browser blocked background audio) */}
+          {selectedRoom && !isAudioPlaybackAllowed && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-950/60 border border-amber-600/50 flex items-center justify-between gap-3 text-xs text-amber-200">
+              <div className="flex items-center gap-2">
+                <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Browser has paused incoming audio due to autoplay restrictions.</span>
+              </div>
+              <button
+                onClick={startAudio}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-lg shadow-sm"
+              >
+                Enable Audio 🔊
+              </button>
+            </div>
+          )}
+
           {/* If In Active Stage */}
           {selectedRoom ? (
             <div className="p-5 rounded-xl bg-slate-950/90 border border-indigo-500/50 mb-6 shadow-xl">
@@ -526,7 +687,7 @@ export default function Home() {
                   <p className="text-xs text-slate-400 mt-1">
                     Your Stage Role: <strong className="text-indigo-400 uppercase font-mono">{activeRole}</strong> • LiveKit SFU:{" "}
                     <span className={isWebRtcConnected ? "text-emerald-400 font-medium" : "text-amber-400 font-medium"}>
-                      {isWebRtcConnecting ? "Connecting..." : isWebRtcConnected ? "WebRTC Sub-100ms Connected" : "Ready"}
+                      {isWebRtcConnecting ? "Connecting..." : isWebRtcConnected ? "WebRTC Connected (127.0.0.1)" : "Ready"}
                     </span>
                   </p>
                 </div>
@@ -539,7 +700,7 @@ export default function Home() {
                       className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors shadow-md ${
                         isMuted
                           ? "bg-slate-800 hover:bg-slate-700 text-red-400 border border-red-500/30"
-                          : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                          : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30"
                       }`}
                     >
                       {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -553,7 +714,7 @@ export default function Home() {
                       onClick={handleHandRaiseToggle}
                       className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors shadow-md ${
                         handRaised
-                          ? "bg-amber-600 text-white"
+                          ? "bg-amber-600 text-white animate-pulse"
                           : "bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30"
                       }`}
                     >
@@ -582,11 +743,92 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Hand-Raise Queue Notification & Moderation Card (Visible to Host & In-Room Participants) */}
+              {handRaiseQueue.length > 0 && (
+                <div className="mt-4 p-4 rounded-xl bg-amber-950/40 border border-amber-500/40">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                      <Bell className="w-4 h-4 animate-bounce" />
+                      <span>
+                        Hand-Raise Requests ({handRaiseQueue.length} in FIFO Queue)
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-amber-300/80 font-mono">
+                      Redis Sorted Set (Chronological Order)
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {handRaiseQueue.map((item, index) => {
+                      const candidateId = item.user._id || item.user.id || "";
+                      const candidateName = item.user.displayName || item.user.username || "Learner";
+                      const isMe = candidateId === user?.id;
+
+                      return (
+                        <div
+                          key={candidateId || index}
+                          className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 font-bold font-mono text-[11px] flex items-center justify-center">
+                              #{index + 1}
+                            </span>
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white text-xs">
+                              {candidateName.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-white flex items-center gap-1.5">
+                                {candidateName}
+                                {isMe && <span className="text-[10px] text-indigo-400 font-normal">(You)</span>}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                @{item.user.username || "learner"}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Host Moderation Controls */}
+                          {activeRole === "host" ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleStageAction(candidateId, "promote")}
+                                className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold text-xs transition-colors shadow"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                Promote to Speaker 🎤
+                              </button>
+                              <button
+                                onClick={() => dismissQueuedUser(candidateId)}
+                                className="flex items-center gap-1 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded text-xs transition-colors"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                Dismiss
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-amber-400/80 italic">
+                              {isMe ? "Waiting for Host approval..." : "Queued in FIFO queue"}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Stage Speakers Grid */}
               <div className="mt-5">
-                <div className="text-xs font-semibold text-slate-400 mb-3 flex items-center gap-1.5">
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
-                  Speaker Stage ({participants.length} Active Participants)
+                <div className="text-xs font-semibold text-slate-400 mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                    Speaker Stage ({participants.length} Active Participants)
+                  </div>
+                  {activeRole === "host" && (
+                    <span className="text-[11px] text-slate-500">
+                      Host Controls: Demote or mute any speaker
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
@@ -594,7 +836,7 @@ export default function Home() {
                     <div
                       key={p.identity}
                       className={`p-3 rounded-xl bg-slate-900 border flex flex-col items-center text-center transition-all ${
-                        p.isSpeaking ? "border-indigo-500 shadow-lg shadow-indigo-500/30 speaking-active" : "border-slate-800"
+                        p.isSpeaking ? "border-indigo-500 shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-500/50" : "border-slate-800"
                       }`}
                     >
                       <div className="relative mb-2">
@@ -612,19 +854,29 @@ export default function Home() {
 
                       <span className="text-xs font-bold text-white truncate max-w-full">{p.name}</span>
                       <span className="text-[10px] text-slate-400 mt-0.5">
-                        {p.isLocal ? "(You)" : "Speaker"}
+                        {p.isLocal ? "(You)" : p.canPublish ? "Speaker" : "Audience"}
                       </span>
 
                       {/* Host stage actions on participant */}
                       {activeRole === "host" && !p.isLocal && (
                         <div className="mt-2 flex items-center gap-1 pt-1 border-t border-slate-800 w-full justify-center">
-                          <button
-                            onClick={() => handleStageAction(p.identity, "demote")}
-                            title="Demote to Listener"
-                            className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
-                          >
-                            Demote
-                          </button>
+                          {p.canPublish ? (
+                            <button
+                              onClick={() => handleStageAction(p.identity, "demote")}
+                              title="Demote to Listener"
+                              className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                            >
+                              Demote
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleStageAction(p.identity, "promote")}
+                              title="Promote to Speaker"
+                              className="text-[9px] px-1.5 py-0.5 bg-emerald-800 hover:bg-emerald-700 text-white rounded"
+                            >
+                              Promote
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1159,7 +1411,7 @@ export default function Home() {
                 Signaling: <span className="text-indigo-400 font-mono">ws://localhost:7880</span>
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
-                Sub-100ms WebRTC ready
+                Sub-100ms WebRTC ready (127.0.0.1)
               </div>
             </div>
           </div>

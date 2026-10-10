@@ -32,7 +32,7 @@ Today, the **LiveKit Audio Infrastructure & Signaling Engine** for **Hilokal Clo
 * **LiveKit Room Token (`src/app/api/rooms/[id]/token/route.ts`):**
   * Resolves user stage role, registers user into Redis room state, and dispatches a signed LiveKit WebRTC access token.
 * **Hand-Raise Endpoint (`src/app/api/rooms/[id]/hand-raise/route.ts`):**
-  * Handles `action: "raise"` (returns FIFO queue position) and `action: "lower"`.
+  * Handles `action: "raise"` (returns FIFO queue position) and `action: "lower"`, with host dismissal permissions.
 * **Host Stage Action (`src/app/api/rooms/[id]/stage-action/route.ts`):**
   * Verifies host permissions, performs atomic Redis stage promotion/demotion, and synchronizes LiveKit WebRTC publishing permissions.
 * **Leave Room (`src/app/api/rooms/[id]/leave/route.ts`):**
@@ -52,3 +52,18 @@ Today, the **LiveKit Audio Infrastructure & Signaling Engine** for **Hilokal Clo
   * Table Creator widget allowing immediate creation of language audio tables.
   * Active Tables Explorer with real-time participant badges.
   * Live Stage Controller allowing learners to enter stages, test microphone toggles, test FIFO hand-raises, and exercise Host promotion/demotion controls.
+
+---
+
+### 5. WebRTC Audio Playback & Real-Time Hand-Raise Queue Resolution
+* **WebRTC ICE IP Candidate Resolution (`docker-compose.yml` & `docker/livekit.yaml`):**
+  * Configured `--node-ip 127.0.0.1` and `node_ip: 127.0.0.1`. Inside Docker on Windows, LiveKit by default advertises its internal bridge IP (`172.x.x.x`), which is unroutable from host browsers over UDP. Explicitly setting `127.0.0.1` allows immediate ICE candidate pair matching and audio media streaming over localhost.
+* **Browser AudioContext & Autoplay Unlocking:**
+  * Added `await room.startAudio()` immediately upon room connection to satisfy modern browser autoplay restrictions.
+  * Configured attached `<audio>` elements with `autoplay = true`, `volume = 1.0`, and `playsinline = true`.
+  * Added fallback "Enable Audio 🔊" button if the browser restricts autoplay.
+* **Host Hand-Raise Queue Card & In-Room Real-Time Synchronization:**
+  * Implemented an active 2-second state polling loop on `/api/rooms/[roomId]` while in an active stage.
+  * Added peer-to-peer data packet broadcasting via `publishData` and `onDataReceived` for zero-latency UI updates.
+  * Added a dedicated **"Hand-Raise Requests (FIFO Queue)"** card visible to the host, displaying waiting learners, chronological rank (`#1`, `#2`), and one-click **"Promote to Speaker 🎤"** and **"Dismiss"** actions.
+  * Implemented dynamic role synchronization so that when a host promotes a listener, their client automatically switches to Speaker role, reveals the "Unmute Mic" control, and enables audio publishing.

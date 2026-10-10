@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { raiseHand, lowerHand } from "@/lib/room-state";
+import { Room } from "@/models";
+import { connectToDatabase } from "@/lib/db";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -31,7 +33,20 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         message: `Hand raised. Position in FIFO queue: #${result.position}`,
       });
     } else if (action === "lower") {
-      await lowerHand(roomId, authPayload.userId);
+      let targetUserId = authPayload.userId;
+
+      // If a host or co-host is dismissing another user's hand raise
+      if (body.userId && body.userId !== authPayload.userId) {
+        await connectToDatabase();
+        const room = await Room.findById(roomId);
+        const isHost = room?.hostId?.toString() === authPayload.userId;
+        const isCoHost = room?.coHostIds?.some((id) => id.toString() === authPayload.userId);
+        if (isHost || isCoHost) {
+          targetUserId = body.userId;
+        }
+      }
+
+      await lowerHand(roomId, targetUserId);
       return NextResponse.json({
         success: true,
         action: "lowered",
