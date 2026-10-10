@@ -45,6 +45,12 @@ import {
   Coffee,
   Heart,
   Smile,
+  Bot,
+  Brain,
+  RotateCw,
+  Lightbulb,
+  BookCheck,
+  Languages,
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
 import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
@@ -155,6 +161,38 @@ interface CoinTxItem {
   createdAt: string;
 }
 
+interface VocabularyWordItem {
+  word: string;
+  definition: string;
+  exampleSentence: string;
+  translation?: string;
+}
+
+interface GrammarTipItem {
+  original: string;
+  suggestion: string;
+  rule: string;
+}
+
+interface RoomAiSummaryData {
+  _id?: string;
+  title: string;
+  summaryMarkdown: string;
+  topicsDiscussed: string[];
+  vocabularyWords: VocabularyWordItem[];
+  grammarTips: GrammarTipItem[];
+  keyPhrases: string[];
+  generatedAt?: string;
+  isAiGenerated?: boolean;
+  modelUsed?: string;
+}
+
+interface ConversationStarterItem {
+  topic: string;
+  question: string;
+  translation: string;
+}
+
 export default function Home() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -199,7 +237,7 @@ export default function Home() {
   const [creatingRoom, setCreatingRoom] = useState<boolean>(false);
 
   // Day 5 Milestone: Live Interactive Engagement & Free Virtual Gift Economy
-  const [activeStageTab, setActiveStageTab] = useState<"chat" | "gifts" | "coins">("chat");
+  const [activeStageTab, setActiveStageTab] = useState<"chat" | "gifts" | "coins" | "ai_coach">("chat");
   const [messages, setMessages] = useState<RoomMessageItem[]>([]);
   const [messagesLoading, setMessagesLoading] = useState<boolean>(false);
   const [chatInput, setChatInput] = useState<string>("");
@@ -223,6 +261,33 @@ export default function Home() {
   // Coin Audit State
   const [coinTransactions, setCoinTransactions] = useState<CoinTxItem[]>([]);
   const [coinLedgerLoading, setCoinLedgerLoading] = useState<boolean>(false);
+
+  // Day 6 Milestone: AI Language Coaching & Gemini Flashcards
+  const [roomSummary, setRoomSummary] = useState<RoomAiSummaryData | null>(null);
+  const [generatingSummary, setGeneratingSummary] = useState<boolean>(false);
+  const [inRoomStarters, setInRoomStarters] = useState<ConversationStarterItem[]>([]);
+  const [generatingInRoomStarters, setGeneratingInRoomStarters] = useState<boolean>(false);
+  const [aiExplainInput, setAiExplainInput] = useState<string>("");
+  const [aiExplainResult, setAiExplainResult] = useState<{
+    original: string;
+    translation: string;
+    explanation: string;
+    alternativeExpressions: string[];
+  } | null>(null);
+  const [explainingPhrase, setExplainingPhrase] = useState<boolean>(false);
+  const [flippedCards, setFlippedCards] = useState<Record<number, boolean>>({});
+  const [masteredCards, setMasteredCards] = useState<Record<number, boolean>>({});
+
+  // Day 6 Standalone AI Study Showcase State
+  const [showcaseLang, setShowcaseLang] = useState<string>("es");
+  const [showcaseLevel, setShowcaseLevel] = useState<string>("B1");
+  const [showcaseStarters, setShowcaseStarters] = useState<ConversationStarterItem[]>([]);
+  const [loadingShowcaseStarters, setLoadingShowcaseStarters] = useState<boolean>(false);
+  const [showcasePhraseInput, setShowcasePhraseInput] = useState<string>("Me cuesta trabajo hablar en público");
+  const [showcasePhraseResult, setShowcasePhraseResult] = useState<any>(null);
+  const [loadingShowcasePhrase, setLoadingShowcasePhrase] = useState<boolean>(false);
+  const [showcaseCardFlipped, setShowcaseCardFlipped] = useState<Record<number, boolean>>({});
+  const [showcaseCardMastered, setShowcaseCardMastered] = useState<Record<number, boolean>>({});
 
   // Forward ref for stage refresh
   const selectedRoomIdRef = useRef<string | null>(null);
@@ -258,46 +323,144 @@ export default function Home() {
     }
   }, [isAuthenticated]);
 
-  const refreshActiveRoomState = useCallback(async (roomId: string) => {
+  const fetchRoomAiSummary = useCallback(async (roomId: string) => {
     try {
-      const res = await fetch(`/api/rooms/${roomId}`);
+      const res = await fetch(`/api/ai/room-summary/${roomId}`);
       const data = await res.json();
-      if (data.success && data.realtime) {
-        setHandRaiseQueue(data.realtime.handRaiseQueue || []);
+      if (data.success && data.summary) {
+        setRoomSummary(data.summary);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch room AI summary:", err);
+    }
+  }, []);
 
-        // Sync current user's role
-        const currentUserId = user?.id;
-        if (currentUserId) {
-          const isHost = data.room?.host?._id === currentUserId || data.room?.host?.id === currentUserId;
-          const isSpeaker = data.realtime.speakers?.some(
-            (s: { _id?: string; id?: string }) => (s._id || s.id) === currentUserId
-          );
+  const generateAiRoomSummary = async (roomId: string) => {
+    setGeneratingSummary(true);
+    setStageActionMsg(null);
+    try {
+      const res = await fetch("/api/ai/summarize-room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to generate AI summary");
 
-          if (isHost) {
-            setActiveRole("host");
-          } else if (isSpeaker) {
-            setActiveRole("speaker");
-            setHandRaised(false);
-          } else {
-            setActiveRole("listener");
-            // Check queue status
-            const queueIndex = data.realtime.handRaiseQueue.findIndex(
-              (q: QueuedUser) => (q.user._id || q.user.id) === currentUserId
+      setRoomSummary(data.summary);
+      setStageActionMsg(
+        `✨ AI Summary Generated! (${data.isAiGenerated ? "Google Gemini 2.5 Flash" : "Contextual Engine"})`
+      );
+    } catch (err: unknown) {
+      setStageActionMsg(err instanceof Error ? err.message : "Failed to generate summary");
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const fetchInRoomConversationStarters = async (lang: string) => {
+    setGeneratingInRoomStarters(true);
+    try {
+      const res = await fetch("/api/ai/conversation-prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: lang, level: "B1" }),
+      });
+      const data = await res.json();
+      if (data.success && data.starters) {
+        setInRoomStarters(data.starters);
+      }
+    } catch (err) {
+      console.warn("Failed to generate starters:", err);
+    } finally {
+      setGeneratingInRoomStarters(false);
+    }
+  };
+
+  const handleExplainPhrase = async (phrase: string, lang: string) => {
+    if (!phrase.trim()) return;
+    setExplainingPhrase(true);
+    try {
+      const res = await fetch("/api/ai/explain-phrase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phrase, language: lang }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setAiExplainResult(data.data);
+      }
+    } catch (err) {
+      console.warn("Failed to explain phrase:", err);
+    } finally {
+      setExplainingPhrase(false);
+    }
+  };
+
+  const handleShareStarterToChat = async (starter: ConversationStarterItem) => {
+    if (!selectedRoom || !isAuthenticated) return;
+    try {
+      const text = `💡 Conversation Topic: "${starter.question}" (${starter.translation})`;
+      const res = await fetch(`/api/rooms/${selectedRoom.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "text", content: text }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await broadcastData({ type: "CHAT_MESSAGE", message: data.message });
+        await fetchMessages(selectedRoom.id);
+        setActiveStageTab("chat");
+        setStageActionMsg("Topic question posted into chat feed!");
+      }
+    } catch (err) {
+      console.warn("Failed to share topic to chat:", err);
+    }
+  };
+
+  const refreshActiveRoomState = useCallback(
+    async (roomId: string) => {
+      try {
+        const res = await fetch(`/api/rooms/${roomId}`);
+        const data = await res.json();
+        if (data.success && data.realtime) {
+          setHandRaiseQueue(data.realtime.handRaiseQueue || []);
+
+          // Sync current user's role
+          const currentUserId = user?.id;
+          if (currentUserId) {
+            const isHost = data.room?.host?._id === currentUserId || data.room?.host?.id === currentUserId;
+            const isSpeaker = data.realtime.speakers?.some(
+              (s: { _id?: string; id?: string }) => (s._id || s.id) === currentUserId
             );
-            if (queueIndex !== -1) {
-              setHandRaised(true);
-              setHandPosition(queueIndex + 1);
-            } else {
+
+            if (isHost) {
+              setActiveRole("host");
+            } else if (isSpeaker) {
+              setActiveRole("speaker");
               setHandRaised(false);
-              setHandPosition(null);
+            } else {
+              setActiveRole("listener");
+              // Check queue status
+              const queueIndex = data.realtime.handRaiseQueue.findIndex(
+                (q: QueuedUser) => (q.user._id || q.user.id) === currentUserId
+              );
+              if (queueIndex !== -1) {
+                setHandRaised(true);
+                setHandPosition(queueIndex + 1);
+              } else {
+                setHandRaised(false);
+                setHandPosition(null);
+              }
             }
           }
         }
+      } catch (err) {
+        console.warn("Failed to refresh active room state:", err);
       }
-    } catch (err) {
-      console.warn("Failed to refresh active room state:", err);
-    }
-  }, [user?.id]);
+    },
+    [user?.id]
+  );
 
   // Handle incoming in-room data packets from peers
   const handleDataReceived = useCallback(
@@ -561,9 +724,11 @@ export default function Home() {
       await connectWebRtc(data.wsUrl, data.token);
       setStageActionMsg(`Connected to audio table as ${data.role.toUpperCase()}`);
 
-      // Refresh in-memory queue & state
+      // Refresh in-memory queue, messages, and AI summary
       await refreshActiveRoomState(roomId);
       await fetchMessages(roomId);
+      await fetchRoomAiSummary(roomId);
+      await fetchInRoomConversationStarters(targetRoom.primaryLanguage);
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Failed to connect to room");
     }
@@ -785,6 +950,7 @@ export default function Home() {
     setHandPosition(null);
     setHandRaiseQueue([]);
     setMessages([]);
+    setRoomSummary(null);
     setStageActionMsg("Disconnected from stage");
     fetchRooms();
   };
@@ -792,6 +958,9 @@ export default function Home() {
   const endStage = async () => {
     if (!selectedRoom) return;
     try {
+      // Trigger AI Summary upon ending room before closing
+      await generateAiRoomSummary(selectedRoom.id);
+
       const res = await fetch(`/api/rooms/${selectedRoom.id}/end`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to end room");
@@ -801,7 +970,7 @@ export default function Home() {
       setActiveToken(null);
       setHandRaiseQueue([]);
       setMessages([]);
-      setStageActionMsg("Audio room ended by Host. Redis keys and LiveKit SFU room closed.");
+      setStageActionMsg("Audio room ended by Host. AI summary generated and stored for learners.");
       fetchRooms();
     } catch (err: unknown) {
       setStageActionMsg(err instanceof Error ? err.message : "Failed to end table");
@@ -887,7 +1056,7 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Day 5 Milestone: In-Room Live Interactive Engagement & Free Virtual Gift Economy */}
+      {/* Live Audio Stage & Engagement Center */}
       <section className="mt-8">
         <div className="bg-slate-900/70 border border-indigo-500/40 rounded-2xl p-6 shadow-2xl backdrop-blur-md relative overflow-hidden">
           <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -895,12 +1064,12 @@ export default function Home() {
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
             <div>
               <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-medium mb-1">
-                <Gift className="w-3.5 h-3.5 text-pink-400" />
-                Day 5 Milestone: In-Room Live Engagement & Free Virtual Gifts (Active)
+                <Radio className="w-3.5 h-3.5 text-indigo-400" />
+                Live Audio Stage & Interactive Learner Hub (Active)
               </div>
-              <h2 className="text-xl font-bold text-white">Audio Stage, Live Chat & Free Virtual Gifts</h2>
+              <h2 className="text-xl font-bold text-white">Audio Stage, Live Chat, Gifts & AI Co-Host</h2>
               <p className="text-sm text-slate-400">
-                Live WebRTC audio, real-time in-room chat, structured language corrections, and 100% free virtual gift economy.
+                WebRTC voice stage, structured language corrections, free virtual gifts, and Google Gemini AI session summaries.
               </p>
             </div>
 
@@ -1012,13 +1181,13 @@ export default function Home() {
                       onClick={endStage}
                       className="flex items-center gap-1.5 px-3 py-2 bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition-colors shadow-md shadow-red-600/20"
                     >
-                      End Table
+                      End Table & Summarize
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Hand-Raise Queue Notification & Moderation Card (Visible to Host & In-Room Participants) */}
+              {/* Hand-Raise Queue Notification & Moderation Card */}
               {handRaiseQueue.length > 0 && (
                 <div className="mt-4 p-4 rounded-xl bg-amber-950/40 border border-amber-500/40">
                   <div className="flex items-center justify-between mb-3">
@@ -1172,10 +1341,10 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Day 5 Milestone: In-Room Live Interactive Engagement (Chat, Corrections & Gifting) */}
+              {/* In-Room Interactive Tabs */}
               <div className="mt-6 pt-5 border-t border-slate-800">
-                {/* Tabs */}
-                <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
+                {/* Tab Navigation */}
+                <div className="flex flex-wrap items-center gap-2 mb-4 border-b border-slate-800 pb-2">
                   <button
                     onClick={() => setActiveStageTab("chat")}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1213,6 +1382,26 @@ export default function Home() {
                   >
                     <Coins className="w-3.5 h-3.5" />
                     Coin Ledger & Free VIP Perks
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveStageTab("ai_coach");
+                      if (selectedRoom?.id) {
+                        fetchRoomAiSummary(selectedRoom.id);
+                        if (inRoomStarters.length === 0) {
+                          fetchInRoomConversationStarters(selectedRoom.primaryLanguage);
+                        }
+                      }
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      activeStageTab === "ai_coach"
+                        ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-purple-300" />
+                    AI Co-Host & Flashcards (Free Gemini)
                   </button>
                 </div>
 
@@ -1604,6 +1793,237 @@ export default function Home() {
                     </div>
                   </div>
                 )}
+
+                {/* Tab 4: Day 6 AI Co-Host & Flashcards (Free Google Gemini) */}
+                {activeStageTab === "ai_coach" && (
+                  <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/40 space-y-6">
+                    {/* Header */}
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-purple-800/40">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Bot className="w-5 h-5 text-purple-400" />
+                          <h4 className="text-sm font-bold text-white">
+                            Google Gemini AI Language Co-Host & Flashcards
+                          </h4>
+                          <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 text-[10px] font-bold">
+                            100% Free Tier
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Assists conversation with dynamic icebreakers, explains vocabulary, and creates 5 study flashcards from the session.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => selectedRoom?.id && generateAiRoomSummary(selectedRoom.id)}
+                        disabled={generatingSummary}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs rounded-lg transition-all shadow-lg shadow-purple-600/30 disabled:opacity-50"
+                      >
+                        <Sparkles className={`w-3.5 h-3.5 ${generatingSummary ? "animate-spin" : ""}`} />
+                        {generatingSummary ? "Gemini Analyzing..." : "Generate Session Summary 📑"}
+                      </button>
+                    </div>
+
+                    {/* Section 1: In-Room Conversation Starters */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                          <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+                          Dynamic Conversation Starters (Target Language: {selectedRoom.primaryLanguage.toUpperCase()})
+                        </div>
+                        <button
+                          onClick={() => fetchInRoomConversationStarters(selectedRoom.primaryLanguage)}
+                          disabled={generatingInRoomStarters}
+                          className="text-[11px] text-purple-300 hover:text-purple-200 flex items-center gap-1"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${generatingInRoomStarters ? "animate-spin" : ""}`} />
+                          Refresh Questions
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {inRoomStarters.map((starter, idx) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex flex-col justify-between"
+                          >
+                            <div>
+                              <div className="text-[10px] text-purple-400 font-semibold uppercase font-mono">
+                                {starter.topic}
+                              </div>
+                              <div className="text-xs font-bold text-white mt-1">
+                                &ldquo;{starter.question}&rdquo;
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-1 italic">
+                                &ldquo;{starter.translation}&rdquo;
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => handleShareStarterToChat(starter)}
+                              className="mt-3 text-[10px] self-start px-2.5 py-1 bg-slate-800 hover:bg-purple-600 text-purple-200 hover:text-white rounded-md transition-colors flex items-center gap-1 border border-slate-700"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              Share to Chat Feed
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Section 2: In-Room Instant Phrase Explainer */}
+                    <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                      <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                        <Brain className="w-3.5 h-3.5 text-indigo-400" />
+                        Instant AI Phrase Breakdown & Grammar Explainer
+                      </div>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={aiExplainInput}
+                          onChange={(e) => setAiExplainInput(e.target.value)}
+                          placeholder="Type any phrase or word (e.g. 'Tengo muchas ganas de verte')..."
+                          className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                        />
+                        <button
+                          onClick={() => handleExplainPhrase(aiExplainInput, selectedRoom.primaryLanguage)}
+                          disabled={explainingPhrase || !aiExplainInput.trim()}
+                          className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition-colors shadow shrink-0 flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Brain className={`w-3 h-3 ${explainingPhrase ? "animate-spin" : ""}`} />
+                          Explain
+                        </button>
+                      </div>
+
+                      {aiExplainResult && (
+                        <div className="p-3 mt-2 rounded-lg bg-slate-950 border border-purple-800/50 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white">&ldquo;{aiExplainResult.original}&rdquo;</span>
+                            <span className="text-emerald-400 font-semibold font-mono">
+                              ➔ {aiExplainResult.translation}
+                            </span>
+                          </div>
+                          <p className="text-slate-300 text-[11px] leading-relaxed">
+                            💡 {aiExplainResult.explanation}
+                          </p>
+                          {aiExplainResult.alternativeExpressions?.length > 0 && (
+                            <div className="pt-1 border-t border-slate-800 text-[10px] text-slate-400">
+                              Natural variations: {aiExplainResult.alternativeExpressions.join(" • ")}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Section 3: Generated Room Summary & Flashcards */}
+                    {roomSummary && (
+                      <div className="space-y-4 pt-3 border-t border-purple-800/40">
+                        <div className="p-4 rounded-xl bg-slate-900 border border-purple-500/30">
+                          <div className="flex items-center justify-between mb-2">
+                            <h5 className="text-sm font-bold text-white flex items-center gap-2">
+                              <BookCheck className="w-4 h-4 text-purple-400" />
+                              {roomSummary.title}
+                            </h5>
+                            <span className="text-[10px] text-purple-300 font-mono bg-purple-950 px-2 py-0.5 rounded border border-purple-800">
+                              {roomSummary.modelUsed || "gemini-2.5-flash"}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-slate-300 whitespace-pre-line leading-relaxed mb-4">
+                            {roomSummary.summaryMarkdown}
+                          </div>
+
+                          {/* 5 Vocabulary Flashcards */}
+                          <div>
+                            <div className="text-xs font-bold text-white mb-2 flex items-center justify-between">
+                              <span>5 Vocabulary Flashcards (Click to Flip Card):</span>
+                              <span className="text-[10px] text-slate-400">
+                                {Object.values(masteredCards).filter(Boolean).length} / 5 Mastered
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                              {roomSummary.vocabularyWords.map((vocab, index) => {
+                                const isFlipped = !!flippedCards[index];
+                                const isMastered = !!masteredCards[index];
+
+                                return (
+                                  <div
+                                    key={index}
+                                    onClick={() =>
+                                      setFlippedCards((prev) => ({ ...prev, [index]: !prev[index] }))
+                                    }
+                                    className={`cursor-pointer p-3.5 rounded-xl border transition-all min-h-[130px] flex flex-col justify-between ${
+                                      isMastered
+                                        ? "bg-emerald-950/20 border-emerald-500/40 shadow-emerald-500/10 shadow"
+                                        : isFlipped
+                                        ? "bg-slate-950 border-purple-500/70"
+                                        : "bg-slate-950/80 border-slate-800 hover:border-slate-700"
+                                    }`}
+                                  >
+                                    {!isFlipped ? (
+                                      <div>
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
+                                            Card #{index + 1}
+                                          </span>
+                                          <RotateCw className="w-3 h-3 text-slate-500" />
+                                        </div>
+                                        <div className="text-sm font-bold text-white mt-2">
+                                          {vocab.word}
+                                        </div>
+                                        <div className="text-[11px] text-indigo-400 font-medium mt-0.5">
+                                          {vocab.translation || "Target Vocabulary"}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div>
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[9px] text-emerald-400 font-mono font-bold">
+                                            Definition & Context
+                                          </span>
+                                          <RotateCw className="w-3 h-3 text-slate-500" />
+                                        </div>
+                                        <p className="text-[11px] text-slate-300 mt-1 line-clamp-2">
+                                          {vocab.definition}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 mt-1 italic line-clamp-2">
+                                          &ldquo;{vocab.exampleSentence}&rdquo;
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    <div
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMasteredCards((prev) => ({ ...prev, [index]: !prev[index] }));
+                                      }}
+                                      className="mt-2 pt-2 border-t border-slate-850 flex items-center justify-between text-[10px]"
+                                    >
+                                      <span className="text-slate-500">
+                                        {isFlipped ? "Click to see term" : "Click to flip"}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        className={`font-semibold flex items-center gap-1 ${
+                                          isMastered ? "text-emerald-400" : "text-slate-400 hover:text-white"
+                                        }`}
+                                      >
+                                        <Check className="w-3 h-3" />
+                                        {isMastered ? "Mastered" : "Mark Mastered"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -1708,6 +2128,176 @@ export default function Home() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Day 6 Milestone: AI Language Coaching & Interactive Study Deck (Google Gemini Free Tier Engine) */}
+      <section className="mt-8">
+        <div className="bg-slate-900/60 border border-purple-500/30 rounded-2xl p-6 shadow-xl backdrop-blur-sm relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
+            <div>
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-purple-500/20 text-purple-300 text-xs font-medium mb-1">
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                Day 6 Milestone: Google Gemini AI Language Coach & Flashcard Deck (Active)
+              </div>
+              <h2 className="text-xl font-bold text-white">AI Language Coaching & Self-Study Suite</h2>
+              <p className="text-sm text-slate-400">
+                100% Free AI suite powered by Google Gemini 2.5 Flash with intelligent contextual fallbacks for offline practice.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-medium">
+                Free Quota: 15 RPM / 1,500 RPD
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Tool 1: AI Dynamic Conversation Starters Generator */}
+            <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <Lightbulb className="w-4 h-4 text-amber-400" />
+                    AI Conversation Starters Generator
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-mono">Gemini AI</span>
+                </div>
+
+                <div className="flex gap-2 mb-3">
+                  <select
+                    value={showcaseLang}
+                    onChange={(e) => setShowcaseLang(e.target.value)}
+                    className="px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-xs text-white rounded-lg focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="es">Spanish (ES)</option>
+                    <option value="en">English (EN)</option>
+                    <option value="ja">Japanese (JA)</option>
+                    <option value="fr">French (FR)</option>
+                    <option value="ur">Urdu (UR)</option>
+                  </select>
+
+                  <select
+                    value={showcaseLevel}
+                    onChange={(e) => setShowcaseLevel(e.target.value)}
+                    className="px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-xs text-white rounded-lg focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="A1">A1 (Beginner)</option>
+                    <option value="A2">A2 (Elementary)</option>
+                    <option value="B1">B1 (Intermediate)</option>
+                    <option value="B2">B2 (Upper Int)</option>
+                    <option value="C1">C1 (Advanced)</option>
+                  </select>
+
+                  <button
+                    onClick={async () => {
+                      setLoadingShowcaseStarters(true);
+                      try {
+                        const res = await fetch("/api/ai/conversation-prompts", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ language: showcaseLang, level: showcaseLevel }),
+                        });
+                        const data = await res.json();
+                        if (data.success && data.starters) setShowcaseStarters(data.starters);
+                      } finally {
+                        setLoadingShowcaseStarters(false);
+                      }
+                    }}
+                    disabled={loadingShowcaseStarters}
+                    className="flex-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs rounded-lg transition-colors shadow shrink-0 flex items-center justify-center gap-1"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${loadingShowcaseStarters ? "animate-spin" : ""}`} />
+                    {loadingShowcaseStarters ? "Generating..." : "Generate 4 Starters"}
+                  </button>
+                </div>
+
+                {/* Starters Display */}
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {showcaseStarters.length === 0 ? (
+                    <div className="p-4 text-center rounded-lg bg-slate-900/50 text-xs text-slate-500">
+                      Click &ldquo;Generate 4 Starters&rdquo; to prompt Google Gemini for engaging discussion topics!
+                    </div>
+                  ) : (
+                    showcaseStarters.map((s, idx) => (
+                      <div key={idx} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs">
+                        <div className="text-[10px] text-purple-400 font-semibold font-mono">{s.topic}</div>
+                        <div className="text-white font-bold mt-0.5">&ldquo;{s.question}&rdquo;</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 italic">&ldquo;{s.translation}&rdquo;</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Tool 2: AI Phrase & Grammar Explainer */}
+            <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <Brain className="w-4 h-4 text-indigo-400" />
+                    AI Sentence Breakdown & Grammar Explainer
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-mono">Free Gemini</span>
+                </div>
+
+                <div className="space-y-2 mb-3">
+                  <input
+                    type="text"
+                    value={showcasePhraseInput}
+                    onChange={(e) => setShowcasePhraseInput(e.target.value)}
+                    placeholder="Enter any sentence or idiom..."
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 text-xs text-white rounded-lg focus:outline-none focus:border-purple-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!showcasePhraseInput.trim()) return;
+                      setLoadingShowcasePhrase(true);
+                      try {
+                        const res = await fetch("/api/ai/explain-phrase", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ phrase: showcasePhraseInput, language: showcaseLang }),
+                        });
+                        const data = await res.json();
+                        if (data.success && data.data) setShowcasePhraseResult(data.data);
+                      } finally {
+                        setLoadingShowcasePhrase(false);
+                      }
+                    }}
+                    disabled={loadingShowcasePhrase || !showcasePhraseInput.trim()}
+                    className="w-full px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-colors shadow flex items-center justify-center gap-1.5"
+                  >
+                    <Bot className={`w-3.5 h-3.5 ${loadingShowcasePhrase ? "animate-spin" : ""}`} />
+                    {loadingShowcasePhrase ? "Analyzing Grammar..." : "Explain Grammar & Natural Nuance"}
+                  </button>
+                </div>
+
+                {showcasePhraseResult && (
+                  <div className="p-3 rounded-lg bg-slate-900 border border-purple-800/40 text-xs space-y-1.5 max-h-52 overflow-y-auto">
+                    <div className="font-bold text-white">
+                      &ldquo;{showcasePhraseResult.original}&rdquo;
+                    </div>
+                    <div className="text-emerald-400 font-semibold">
+                      ➔ {showcasePhraseResult.translation}
+                    </div>
+                    <p className="text-slate-300 text-[11px] leading-relaxed">
+                      💡 {showcasePhraseResult.explanation}
+                    </p>
+                    {showcasePhraseResult.alternativeExpressions?.length > 0 && (
+                      <div className="pt-1 border-t border-slate-800 text-[10px] text-slate-400">
+                        Alternative expressions: {showcasePhraseResult.alternativeExpressions.join(" • ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -2306,7 +2896,7 @@ export default function Home() {
             </p>
           </div>
           <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-pink-400">
-            Active in Day 5 <Sparkles className="w-3.5 h-3.5" />
+            Active in Day 5 <CheckCircle2 className="w-3.5 h-3.5" />
           </div>
         </div>
 
@@ -2321,7 +2911,7 @@ export default function Home() {
             </p>
           </div>
           <div className="mt-4 flex items-center gap-1.5 text-xs font-semibold text-purple-400">
-            Coming in Day 6 <ArrowRight className="w-3.5 h-3.5" />
+            Active in Day 6 <CheckCircle2 className="w-3.5 h-3.5" />
           </div>
         </div>
       </section>
